@@ -72,3 +72,16 @@ test('update checker reads metadata, never installs code', async () => {
   assert.equal(status.newer, '13.3.0');
   assert.equal(typeof api.checkForUpdate, 'function');
 });
+
+test('resetTimer clears elapsed time while leaving farm running', () => {
+  const { api, context } = setup();
+  // Start does not require ready websocket; the async loop will wait for it.
+  api.start();
+  assert.equal(api.state.running, true);
+  assert.equal(api.resetTimer(), '00:00:00');
+  assert.equal(api.state.running, true);
+  assert.equal(context.sessionStorage.getItem('magic_garden_v13_elapsed_ms'), '0');
+  api.stop();
+  assert.equal(api.state.running, false);
+  assert.equal(api.resetTimer(), '00:00:00');
+});
