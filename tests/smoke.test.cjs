@@ -32,7 +32,7 @@ function setup(prefs = {}) {
   return { api: window.MGAutoFarmV13, localStorage, context };
 }
 
-test('V13.2 initializes and retains selection and prior controls', () => {
+test('V13.2.1 initializes and retains selection and prior controls', () => {
   const { api } = setup();
   assert.ok(api);
   assert.equal(api.selectedSlots().size, 3);
@@ -58,7 +58,7 @@ test('settings are validated and persisted', () => {
 test('diagnostics exclude raw user/game identifiers', () => {
   const { api } = setup();
   const report = api.getDiagnostics();
-  assert.equal(report.version, '13.2.0');
+  assert.equal(report.version, '13.2.1');
   assert.equal(report.selectedFieldCount, 3);
   assert.ok(!Object.keys(report).some(k =>
     /cookie|user|account|itemId|cropId|requestId|inventoryItems/i.test(k)
@@ -84,4 +84,64 @@ test('resetTimer clears elapsed time while leaving farm running', () => {
   api.stop();
   assert.equal(api.state.running, false);
   assert.equal(api.resetTimer(), '00:00:00');
+});
+
+test('session reset clears time and counters, preserves fields, preferences and protected cooldowns', () => {
+  const { api, localStorage, context } = setup({ sellThreshold: 55 });
+  api.start();
+  api.state.harvested = 87;
+  api.state.sold = 3;
+  api.state.coins = 500123;
+  api.state.errors = 4;
+  api.state.protectedSkips = 2;
+  api.state.antiAfkTicks = 7;
+  api.state.reconnects = 1;
+  api.state.selfHealChecks = 9;
+  api.state.lastError = 'old error';
+  api.state.cooldowns.set('protected:tile', Date.now() + 30_000);
+  const result = api.resetSession();
+  assert.deepEqual(Object.values(result), ['00:00:00', 0, 0, 0]);
+  assert.equal(api.state.running, true);
+  for (const key of ['harvested', 'sold', 'coins', 'errors', 'protectedSkips', 'antiAfkTicks', 'reconnects', 'selfHealChecks']) {
+    assert.equal(api.state[key], 0, key);
+  }
+  assert.equal(api.state.lastError, '');
+  assert.equal(api.selectedSlots().size, 3);
+  assert.equal(api.prefs.sellThreshold, 55);
+  assert.ok(api.state.cooldowns.has('protected:tile'));
+  assert.equal(context.sessionStorage.getItem('magic_garden_v13_elapsed_ms'), '0');
+  assert.deepEqual(JSON.parse(localStorage.getItem('magic_garden_selected_tiles_v1')).left, [0, 1]);
+  api.stop();
+});
+
+test('a harvest already in flight does not count toward a freshly reset session', async () => {
+  const { api, context } = setup();
+  const listeners = new Set();
+  let lastCommand;
+  const ws = {
+    readyState: 1,
+    addEventListener(type, fn) { if (type === 'message') listeners.add(fn); },
+    removeEventListener(type, fn) { if (type === 'message') listeners.delete(fn); },
+    send(text) { lastCommand = JSON.parse(text); }
+  };
+  context.window.quinoaWS = ws;
+  context.window.__qpmGardenSnapshot__ = {
+    tileObjects: { 0: { objectType: 'plant', slots: [{ slotId: 0, endTime: 0 }] } }
+  };
+  api.start();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(lastCommand.command.type, 'HarvestCrop');
+  api.resetSession();
+  for (const listener of listeners) listener({
+    data: JSON.stringify({
+      type: 'QuinoaCommandResult',
+      requestId: lastCommand.requestId,
+      ok: true,
+      itemGains: [{}]
+    })
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(api.state.harvested, 0);
+  assert.ok(api.state.cooldowns.has('0:0'));
+  api.stop();
 });
