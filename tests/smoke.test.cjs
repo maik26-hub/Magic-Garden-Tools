@@ -24,7 +24,7 @@ function setup(prefs = {}) {
     crypto: { randomUUID: () => 'mock-request-id' },
     navigator: { onLine: true },
     location: { reload() {} },
-    setTimeout, clearTimeout,
+    setTimeout, clearTimeout, AbortController,
     console: { log() {}, warn() {}, info() {}, error() {} },
     fetch: async () => ({ ok: true, text: async () => source })
   };
