@@ -2,8 +2,8 @@
 // @name         Magic Garden AutoFarm
 // @namespace    mg-autofarm-local
 // @version      13.0.0
-// @updateURL   https://raw.githubusercontent.com/DEIN_GITHUB_NAME/magic-garden-autofarm/main/MagicGardenAutoFarm.user.js
-// @downloadURL https://raw.githubusercontent.com/DEIN_GITHUB_NAME/magic-garden-autofarm/main/MagicGardenAutoFarm.user.js
+// @updateURL  https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js
+// @downloadURL https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js
 // @description  Adaptive Harvest, Auto Sell, Anti-AFK (experimentell), Auto-Reconnect, Background, F8, Auto-Resume, Recovery
 // @match        https://magicgarden.gg/*
 // @run-at       document-start
