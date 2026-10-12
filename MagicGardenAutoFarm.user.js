@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         Magic Garden AutoFarm
 // @namespace    mg-autofarm-local
-// @version      13.2.1
+// @version      13.2.2
 // @updateURL   https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js
 // @downloadURL https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js
-// @description  V13.2.1: Session-Reset plus Self-Healing, Einstellungen, Updates und Diagnose
+// @description  V13.2.2: Feldauswahl per Ziehen, Session-Reset, Self-Healing und Einstellungen
 // @match        https://magicgarden.gg/*
 // @run-at       document-start
 // @grant        none
@@ -82,7 +82,7 @@
   }
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-  const VERSION = "13.2.1";
+  const VERSION = "13.2.2";
   const UPDATE_URL = "https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js";
   const NUMBER_FIELDS = Object.freeze({
     sellThreshold: { min: 5, max: 200, step: 1 },
@@ -845,7 +845,7 @@
     const status = panel.querySelector("#mg13-status");
     const stats = panel.querySelector("#mg13-stats");
     if (status) status.textContent = state.running ? "🟢 Aktiv" : state.busy ? "🟡 Stoppt …" : "🔴 Gestoppt";
-    if (headline) headline.textContent = state.running ? "🌱 V13.2.1 · Aktiv" : "🌱 Magic Garden V13.2.1";
+    if (headline) headline.textContent = state.running ? "🌱 V13.2.2 · Aktiv" : "🌱 Magic Garden V13.2.2";
     if (stats) stats.textContent =
       `Felder: ${selectedSlots().size} / 200\n` +
       `Geerntet: ${state.harvested}\n` +
@@ -880,21 +880,128 @@
     label.style.cssText = "font-weight:bold;margin:12px 0 7px";
     parent.appendChild(label);
     const grid = document.createElement("div");
-    grid.style.cssText = "display:grid;grid-template-columns:repeat(10,minmax(0,1fr));gap:3px";
+    grid.style.cssText = "display:grid;grid-template-columns:repeat(10,minmax(0,1fr));gap:3px;touch-action:none";
     for (let i = 0; i < 100; i++) {
-      const el = btn(String(i + 1), () => {
+      const el = btn(String(i + 1), event => {
+        // Pointer-Eingaben laufen ueber die Paint-Geste; "click" ist nur fuer
+        // Tastatur (Enter/Leertaste, detail===0). Kein doppeltes Umschalten.
+        if (event.detail !== 0) return;
         if (selection[side].has(i)) selection[side].delete(i);
         else selection[side].add(i);
         saveSelection();
         repaintFields();
       });
+      el.dataset.mgField = "1";
+      el.dataset.side = side;
+      el.dataset.index = String(i);
       el.title = `${side === "left" ? "Links" : "Rechts"}: Reihe ${Math.floor(i / 10) + 1}, Spalte ${i % 10 + 1}`;
-      el.style.cssText = "aspect-ratio:1;min-width:0;padding:0;border:1px solid;border-radius:4px;color:#fff;font-size:10px;cursor:pointer";
+      el.style.cssText = "aspect-ratio:1;min-width:0;padding:0;border:1px solid;border-radius:4px;color:#fff;font-size:10px;cursor:pointer;touch-action:none;user-select:none";
       fieldButtons.push({ el, side, i });
       grid.appendChild(el);
     }
     parent.appendChild(grid);
   }
+
+  // ===== V13.2.2: Auswaehlen/Abwaehlen durch Gedrueckthalten und Ziehen =====
+  // Ein Stroke waehlt genau EINEN Modus (markieren ODER entfernen), abhaengig
+  // vom Startfeld. Jedes Feld wird dabei hoechstens einmal bearbeitet.
+  // Pointer-Capture haelt die Geste auch beim Wechsel zwischen beiden Grids.
+  function installFieldPainting(container) {
+    let stroke = null;
+
+    function hitFromElement(el) {
+      const button = el?.closest?.("[data-mg-field]");
+      if (!button || !container.contains(button)) return null;
+      const side = button.dataset.side;
+      const index = Number(button.dataset.index);
+      if (!["left", "right"].includes(side) ||
+          !Number.isInteger(index) || index < 0 || index >= 100) return null;
+      return { button, side, index };
+    }
+
+    function paint(hit) {
+      if (!stroke || !hit) return;
+      const key = `${hit.side}:${hit.index}`;
+      if (stroke.visited.has(key)) return;
+      stroke.visited.add(key);
+      const chosen = selection[hit.side];
+      if (chosen.has(hit.index) === stroke.select) return;
+      if (stroke.select) chosen.add(hit.index);
+      else chosen.delete(hit.index);
+      hit.button.style.background = stroke.select ? "#237c49" : "#1b2a23";
+      hit.button.style.borderColor = stroke.select ? "#65d88c" : "#456052";
+      stroke.changed = true;
+      if (fieldCount) {
+        fieldCount.textContent =
+          `Ausgewählt: ${selection.left.size + selection.right.size} / 200`;
+      }
+    }
+
+    function paintAlongPath(x, y) {
+      if (!stroke) return;
+      const from = stroke.last;
+      const distance = Math.hypot(x - from.x, y - from.y);
+      // Auch bei schneller Bewegung Zwischenfelder erfassen.
+      const steps = Math.max(1, Math.min(350, Math.ceil(distance / 7)));
+      for (let n = 1; n <= steps; n++) {
+        const fx = from.x + (x - from.x) * n / steps;
+        const fy = from.y + (y - from.y) * n / steps;
+        paint(hitFromElement(document.elementFromPoint(fx, fy)));
+      }
+      stroke.last = { x, y };
+    }
+
+    function finish(event) {
+      if (!stroke || (event?.pointerId != null &&
+          event.pointerId !== stroke.pointerId)) return;
+      if (event?.type === "pointerup") {
+        paintAlongPath(event.clientX, event.clientY);
+      }
+      const pointerId = stroke.pointerId;
+      const changed = stroke.changed;
+      stroke = null;
+      try {
+        if (container.hasPointerCapture?.(pointerId)) {
+          container.releasePointerCapture(pointerId);
+        }
+      } catch { /* Capture wurde bereits vom Browser beendet. */ }
+      if (changed) {
+        saveSelection();
+        updatePanel();
+      }
+    }
+
+    container.addEventListener("pointerdown", event => {
+      if (stroke || event.button !== 0 || event.isPrimary === false) return;
+      const hit = hitFromElement(event.target);
+      if (!hit) return;
+      stroke = {
+        pointerId: event.pointerId,
+        select: !selection[hit.side].has(hit.index),
+        visited: new Set(),
+        last: { x: event.clientX, y: event.clientY },
+        changed: false
+      };
+      paint(hit);
+      try { container.setPointerCapture?.(event.pointerId); }
+      catch { /* Pointer-Tracking funktioniert innerhalb des Grids weiter. */ }
+      event.preventDefault();
+    });
+
+    container.addEventListener("pointermove", event => {
+      if (!stroke || event.pointerId !== stroke.pointerId) return;
+      paintAlongPath(event.clientX, event.clientY);
+      event.preventDefault();
+    });
+    container.addEventListener("pointerup", finish);
+    container.addEventListener("pointercancel", finish);
+    container.addEventListener("lostpointercapture", finish);
+    // Fallback fuer Browser, die kein Pointer-Capture erlauben.
+    window.addEventListener("pointerup", finish);
+    window.addEventListener("pointercancel", finish);
+    window.addEventListener("blur", () => finish());
+  }
+
   function createPanel() {
     if (panel || !document.body) return;
     panel = document.createElement("div");
@@ -904,7 +1011,7 @@
     const header = document.createElement("div");
     header.style.cssText = "display:flex;justify-content:space-between;align-items:center;gap:8px";
     headline = document.createElement("strong");
-    headline.textContent = "🌱 Magic Garden V13.2.1";
+    headline.textContent = "🌱 Magic Garden V13.2.2";
     headline.style.fontSize = "16px";
     const toggle = btn(collapsed ? "+" : "−", () => {
       collapsed = !collapsed;
@@ -1023,8 +1130,13 @@
     fieldCount = document.createElement("div");
     fieldCount.style.marginTop = "8px";
     fields.appendChild(fieldCount);
+    const hint = document.createElement("small");
+    hint.textContent = "Feld anklicken oder Maustaste gedrückt halten und darüber ziehen – Startfeld bestimmt Markieren/Entfernen.";
+    hint.style.cssText = "display:block;color:#a8b9ae;line-height:1.4;margin-top:6px";
+    fields.appendChild(hint);
     makeGrid("left", fields);
     makeGrid("right", fields);
+    installFieldPainting(fields);
     const actions = document.createElement("div");
     actions.style.cssText = "display:flex;gap:6px;margin-top:12px";
     actions.append(
@@ -1094,5 +1206,5 @@
   if (readValue(sessionStorage, KEYS.resume) === "1") {
     start({ auto: true });
   }
-  console.log("✅ Magic Garden AutoFarm V13.2.1 geladen (Garden Companion erforderlich).");
+  console.log("✅ Magic Garden AutoFarm V13.2.2 geladen (Garden Companion erforderlich).");
 })();
