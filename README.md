@@ -2,7 +2,7 @@
 
 **Automatisches Ernten und Verkaufen für [Magic Garden](https://magicgarden.gg/) – direkt im Browser über Tampermonkey.**
 
-> **Aktuelle Version:** V13.2.0 (PR-Vorschau, noch nicht auf `main`) · Inoffizielles Community-Projekt, nicht mit Magic Garden verbunden.
+> **Aktuelle Version:** V13.2.0 · Inoffizielles Community-Projekt, nicht mit Magic Garden verbunden.
 
 ## 🚀 Installation
 
@@ -25,7 +25,7 @@
 | 💰 Auto-Sell | Verkauft nicht favorisierte Erzeugnisse automatisch, sobald mindestens 40 verkaufbare Items vorliegen. |
 | ⚡ Adaptive Geschwindigkeit | Passt die Pause zwischen Ernten an Serverantwortzeiten an (75–1.000 ms). |
 | 🧩 Feldauswahl | 2 × 10 × 10 Felder, dauerhaft im Browser gespeichert. |
-| ⏱️ Laufzeit-Timer | Zählt aktive Laufzeit; Stop pausiert den Timer. |
+| ⏱️ Laufzeit-Timer | Zählt aktive Laufzeit; Stop pausiert den Timer. Der Button „Laufzeit zurücksetzen“ setzt nur den Timer zurück – auch während des Farmens. |
 | 💤 Anti-AFK (experimentell) | Sendet synthetische Mausbewegungsereignisse nach Inaktivität. **Kein garantierter Schutz vor AFK-Kicks.** |
 | 🔌 Auto-Reconnect | Wartet bei Verbindungsverlust und kann nach längerer Unterbrechung kontrolliert neu laden. |
 | 🔁 Auto-Resume | Setzt einen zuvor aktiven Lauf nach Neuladen im selben Tab fort. |
@@ -42,6 +42,7 @@
 
 - **▶ Start:** AutoFarm einschalten.
 - **■ Stop:** AutoFarm und Timer anhalten.
+- **↺ Laufzeit zurücksetzen:** Timer jederzeit auf 00:00:00 setzen, ohne Ernten oder Verkäufe zurückzusetzen.
 - **F8:** Zwischen Start und Stop umschalten (außer beim Tippen in Eingabefeldern).
 - **+/−:** Menü aus- oder einklappen.
 - **Grüne Felder:** Für die Ernte ausgewählt; Änderungen werden automatisch gespeichert.
