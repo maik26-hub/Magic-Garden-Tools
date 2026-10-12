@@ -2,7 +2,7 @@
 
 **Automatisches Ernten und Verkaufen für [Magic Garden](https://magicgarden.gg/) – direkt im Browser über Tampermonkey.**
 
-> **Aktuelle Version:** V13.2.1 · Inoffizielles Community-Projekt, nicht mit Magic Garden verbunden.
+> **Aktuelle Version:** V13.2.2 · Inoffizielles Community-Projekt, nicht mit Magic Garden verbunden.
 
 ## 🚀 Installation
 
@@ -24,7 +24,7 @@
 | 🌾 Auto-Harvest | Erntet reife Pflanzen auf ausgewählten Feldern. |
 | 💰 Auto-Sell | Verkauft nicht favorisierte Erzeugnisse automatisch, sobald mindestens 40 verkaufbare Items vorliegen. |
 | ⚡ Adaptive Geschwindigkeit | Passt die Pause zwischen Ernten an Serverantwortzeiten an (75–1.000 ms). |
-| 🧩 Feldauswahl | 2 × 10 × 10 Felder, dauerhaft im Browser gespeichert. |
+| 🧩 Feldauswahl | 2 × 10 × 10 Felder, dauerhaft gespeichert. Felder per Klick oder durch Gedrückthalten und Ziehen markieren/abwählen – auch über beide Gartenhälften. |
 | ⏱️ Session-Zähler | Laufzeit, Ernten, Verkäufe, verdiente Coins und Fehlerzähler lassen sich gemeinsam zurücksetzen – die Farm läuft weiter. |
 | 💤 Anti-AFK (experimentell) | Sendet synthetische Mausbewegungsereignisse nach Inaktivität. **Kein garantierter Schutz vor AFK-Kicks.** |
 | 🔌 Auto-Reconnect | Wartet bei Verbindungsverlust und kann nach längerer Unterbrechung kontrolliert neu laden. |
@@ -46,6 +46,7 @@
 - **F8:** Zwischen Start und Stop umschalten (außer beim Tippen in Eingabefeldern).
 - **+/−:** Menü aus- oder einklappen.
 - **Grüne Felder:** Für die Ernte ausgewählt; Änderungen werden automatisch gespeichert.
+- **Felder per Ziehen auswählen:** Maustaste auf einem Feld gedrückt halten und über weitere ziehen. Start auf einem dunklen Feld = markieren; Start auf einem grünen Feld = abwählen. Funktioniert auch per Touch.
 - **Optionen im Menü:** Adaptive Geschwindigkeit, experimenteller Anti-AFK und Auto-Neuladen können einzeln deaktiviert werden.
 
 ## 🔧 Einstellungen und Diagnose (V13.2)
