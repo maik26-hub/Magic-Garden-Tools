@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         Magic Garden AutoFarm
 // @namespace    mg-autofarm-local
-// @version      13.2.0
+// @version      13.2.1
 // @updateURL   https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js
 // @downloadURL https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js
-// @description  V13.2: Self-Healing, Einstellungen, Updates, Diagnose plus V13.1-Funktionen
+// @description  V13.2.1: Session-Reset plus Self-Healing, Einstellungen, Updates und Diagnose
 // @match        https://magicgarden.gg/*
 // @run-at       document-start
 // @grant        none
@@ -82,7 +82,7 @@
   }
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-  const VERSION = "13.2.0";
+  const VERSION = "13.2.1";
   const UPDATE_URL = "https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js";
   const NUMBER_FIELDS = Object.freeze({
     sellThreshold: { min: 5, max: 200, step: 1 },
@@ -159,7 +159,8 @@
     ripeSince: null,
     lastSelfHealAt: null,
     selfHealAttempts: 0,
-    selfHealChecks: 0
+    selfHealChecks: 0,
+    sessionEpoch: 0
   };
 
   // ===== Laufzeit: Start/Stop; nach F5 im selben Tab fortsetzen =====
@@ -187,6 +188,31 @@
     persistTimer();
     updatePanel();
     return formatTime(runtimeMs());
+  }
+  // Nur lokale Session-Zaehler; keine Aenderung am Coin-Kontostand im Spiel.
+  // Der Farming-Loop und der Pflanzenschutz werden nicht zurueckgesetzt.
+  function resetSession() {
+    state.sessionEpoch++;
+    resetTimer();
+    for (const key of [
+      "harvested", "sold", "coins", "errors", "protectedSkips",
+      "reconnects", "antiAfkTicks", "selfHealChecks", "speedAdjustments",
+      "lastResponseMs", "averageResponseMs"
+    ]) state[key] = 0;
+    state.lastError = "";
+    state.successStreak = 0;
+    state.lastHarvestAt = null;
+    state.ripeSince = null;
+    state.lastSelfHealAt = null;
+    state.selfHealAttempts = 0;
+    updatePanel();
+    console.info("[MG V13.2.1] Session zurueckgesetzt; AutoFarm bleibt aktiv.");
+    return {
+      laufzeit: formatTime(runtimeMs()),
+      geerntet: state.harvested,
+      verkaeufe: state.sold,
+      coins: state.coins
+    };
   }
   function formatTime(ms) {
     const seconds = Math.floor(Math.max(0, ms) / 1000);
@@ -351,11 +377,15 @@
     });
   }
   async function harvest(target) {
+    const epoch = state.sessionEpoch;
     const result = await sendCommand({
       type: "HarvestCrop", slot: target.tile, slotsIndex: target.slotsIndex,
       cropItemId: crypto.randomUUID()
     });
-    state.harvested += result.itemGains?.length || 1;
+    if (epoch === state.sessionEpoch) {
+      state.harvested += result.itemGains?.length || 1;
+    }
+    // Bestaetigte Ernte weiterhin im Cooldown respektieren – selbst bei Reset.
     state.cooldowns.set(target.key, Date.now() + cfg.harvestedSlotCooldownMs);
     state.lastHarvestAt = Date.now();
     state.ripeSince = null;
@@ -363,7 +393,9 @@
     state.selfHealAttempts = 0;
   }
   async function sell() {
+    const epoch = state.sessionEpoch;
     const result = await sendCommand({ type: "SellAllCrops" });
+    if (epoch !== state.sessionEpoch) return;
     state.sold++;
     state.coins += Number(result.currencyGains?.coins) || 0;
   }
@@ -813,7 +845,7 @@
     const status = panel.querySelector("#mg13-status");
     const stats = panel.querySelector("#mg13-stats");
     if (status) status.textContent = state.running ? "🟢 Aktiv" : state.busy ? "🟡 Stoppt …" : "🔴 Gestoppt";
-    if (headline) headline.textContent = state.running ? "🌱 V13.2 · Aktiv" : "🌱 Magic Garden V13.2";
+    if (headline) headline.textContent = state.running ? "🌱 V13.2.1 · Aktiv" : "🌱 Magic Garden V13.2.1";
     if (stats) stats.textContent =
       `Felder: ${selectedSlots().size} / 200\n` +
       `Geerntet: ${state.harvested}\n` +
@@ -872,7 +904,7 @@
     const header = document.createElement("div");
     header.style.cssText = "display:flex;justify-content:space-between;align-items:center;gap:8px";
     headline = document.createElement("strong");
-    headline.textContent = "🌱 Magic Garden V13.2";
+    headline.textContent = "🌱 Magic Garden V13.2.1";
     headline.style.fontSize = "16px";
     const toggle = btn(collapsed ? "+" : "−", () => {
       collapsed = !collapsed;
@@ -908,8 +940,8 @@
     stopBtn.style.background = "#a93232";
     controls.append(startBtn, stopBtn);
     body.appendChild(controls);
-    const resetButton = btn("↺ Laufzeit zurücksetzen", resetTimer);
-    resetButton.title = "Setzt nur den Laufzeit-Timer zurück. Ernten, Verkäufe und Coins bleiben erhalten.";
+    const resetButton = btn("↺ Session zurücksetzen (Zeit + Zähler)", resetSession);
+    resetButton.title = "Setzt Laufzeit, verdiente Coins, Ernten, Verkäufe und Fehlerzähler zurück. Die Farm läuft weiter.";
     resetButton.style.cssText += ";display:block;width:100%;margin:-3px 0 14px";
     body.appendChild(resetButton);
 
@@ -1029,7 +1061,7 @@
 
   // ===== Konsole =====
   window.MGAutoFarmV13 = {
-    state, cfg, prefs, start, stop, resetTimer, selectedSlots, getDiagnostics, checkForUpdate, setNumberPreference,
+    state, cfg, prefs, start, stop, resetTimer, resetSession, selectedSlots, getDiagnostics, checkForUpdate, setNumberPreference,
     status() {
       const details = {
         Aktiv: state.running,
@@ -1062,5 +1094,5 @@
   if (readValue(sessionStorage, KEYS.resume) === "1") {
     start({ auto: true });
   }
-  console.log("✅ Magic Garden AutoFarm V13.2 geladen (Garden Companion erforderlich).");
+  console.log("✅ Magic Garden AutoFarm V13.2.1 geladen (Garden Companion erforderlich).");
 })();
