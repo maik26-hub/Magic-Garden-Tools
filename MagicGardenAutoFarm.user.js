@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         Magic Garden AutoFarm
 // @namespace    mg-autofarm-local
-// @version      13.0.0
-// @updateURL  https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js
+// @version      13.1.0
+// @updateURL   https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js
 // @downloadURL https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js
-// @description  Adaptive Harvest, Auto Sell, Anti-AFK (experimentell), Auto-Reconnect, Background, F8, Auto-Resume, Recovery
+// @description  V13.1: Verschiebbares Menue, adaptive Ernte, Auto-Sell, Timer, Anti-AFK, Auto-Reconnect, F8, Auto-Resume, Recovery
 // @match        https://magicgarden.gg/*
 // @run-at       document-start
 // @grant        none
@@ -28,7 +28,8 @@
     prefs: "magic_garden_v13_preferences",
     resume: "magic_garden_v13_should_resume",           // sessionStorage: pro Tab
     timer: "magic_garden_v13_elapsed_ms",               // sessionStorage
-    reloads: "magic_garden_v13_reload_history"          // sessionStorage
+    reloads: "magic_garden_v13_reload_history",         // sessionStorage
+    panelPosition: "magic_garden_v13_panel_position"   // localStorage
   };
 
   const cfg = {
@@ -539,6 +540,73 @@
   const fieldButtons = [];
   let collapsed = readValue(localStorage, KEYS.collapsed) === "true";
 
+  // ===== V13.1: Menue via Titelleiste ziehen, Position nach F5 behalten =====
+  function positionPanel(left, top, persist = true) {
+    if (!panel) return;
+    const bounds = panel.getBoundingClientRect();
+    const maxX = Math.max(8, window.innerWidth - bounds.width - 8);
+    // Die Titelleiste soll sichtbar bleiben. Ist das Panel tiefer platziert,
+    // wird der scrollbare Inhalt verkleinert statt die Bewegung zu blockieren.
+    const maxY = Math.max(8, window.innerHeight - 84);
+    const x = clamp(Math.round(left), 8, maxX);
+    const y = clamp(Math.round(top), 8, maxY);
+    panel.style.left = `${x}px`;
+    panel.style.top = `${y}px`;
+    panel.style.right = "auto";
+    panel.style.maxHeight = `${Math.min(Math.floor(window.innerHeight * 0.85),
+      Math.max(76, window.innerHeight - y - 8))}px`;
+    if (persist) storeJSON(localStorage, KEYS.panelPosition, { left: x, top: y });
+  }
+
+  function installPanelDragging(header) {
+    header.style.cursor = "grab";
+    header.style.userSelect = "none";
+    header.style.touchAction = "none";
+    header.title = "Hier ziehen, um das Menue zu verschieben";
+    let drag = null;
+
+    header.addEventListener("pointerdown", event => {
+      // Plus/Minus bleibt ein normaler Button und startet keinen Drag.
+      if (event.button !== 0 || event.isPrimary === false ||
+          event.target?.closest?.("button")) return;
+      const rect = panel.getBoundingClientRect();
+      drag = {
+        pointerId: event.pointerId,
+        clientX: event.clientX,
+        clientY: event.clientY,
+        left: rect.left,
+        top: rect.top
+      };
+      header.style.cursor = "grabbing";
+      header.setPointerCapture(event.pointerId);
+      event.preventDefault();
+    });
+
+    header.addEventListener("pointermove", event => {
+      if (!drag || event.pointerId !== drag.pointerId) return;
+      positionPanel(
+        drag.left + event.clientX - drag.clientX,
+        drag.top + event.clientY - drag.clientY,
+        false
+      );
+      event.preventDefault();
+    });
+
+    function finishDrag(event) {
+      if (!drag || event.pointerId !== drag.pointerId) return;
+      drag = null;
+      header.style.cursor = "grab";
+      const rect = panel.getBoundingClientRect();
+      positionPanel(rect.left, rect.top, true);
+      if (header.hasPointerCapture(event.pointerId)) {
+        header.releasePointerCapture(event.pointerId);
+      }
+    }
+    header.addEventListener("pointerup", finishDrag);
+    header.addEventListener("pointercancel", finishDrag);
+    header.addEventListener("lostpointercapture", finishDrag);
+  }
+
   function btn(label, callback) {
     const el = document.createElement("button");
     el.type = "button";
@@ -564,7 +632,7 @@
     const status = panel.querySelector("#mg13-status");
     const stats = panel.querySelector("#mg13-stats");
     if (status) status.textContent = state.running ? "🟢 Aktiv" : state.busy ? "🟡 Stoppt …" : "🔴 Gestoppt";
-    if (headline) headline.textContent = state.running ? "🌱 V13 · Aktiv" : "🌱 Magic Garden V13";
+    if (headline) headline.textContent = state.running ? "🌱 V13.1 · Aktiv" : "🌱 Magic Garden V13.1";
     if (stats) stats.textContent =
       `Felder: ${selectedSlots().size} / 200\n` +
       `Geerntet: ${state.harvested}\n` +
@@ -620,16 +688,27 @@
     const header = document.createElement("div");
     header.style.cssText = "display:flex;justify-content:space-between;align-items:center;gap:8px";
     headline = document.createElement("strong");
-    headline.textContent = "🌱 Magic Garden V13";
+    headline.textContent = "🌱 Magic Garden V13.1";
     headline.style.fontSize = "16px";
     const toggle = btn(collapsed ? "+" : "−", () => {
       collapsed = !collapsed;
       storeValue(localStorage, KEYS.collapsed, String(collapsed));
       body.style.display = collapsed ? "none" : "";
       toggle.textContent = collapsed ? "+" : "−";
+      // Nach Ein-/Ausklappen pruefen, dass das Panel im Bildschirm bleibt.
+      if (panel.style.left) {
+        const rect = panel.getBoundingClientRect();
+        positionPanel(rect.left, rect.top);
+      }
     });
     toggle.style.cssText += ";flex:none;padding:5px 12px;font-size:18px";
     header.append(headline, toggle);
+    const grip = document.createElement("span");
+    grip.textContent = "⠿";
+    grip.title = "Zum Verschieben an der Titelleiste ziehen";
+    grip.style.cssText = "color:#81d4a0;font-size:20px;margin-right:6px;pointer-events:none";
+    header.insertBefore(grip, headline);
+    installPanelDragging(header);
     panel.appendChild(header);
 
     body = document.createElement("div");
@@ -687,6 +766,16 @@
     body.appendChild(fields);
     panel.appendChild(body);
     document.body.appendChild(panel);
+    const savedPosition = readJSON(localStorage, KEYS.panelPosition, null);
+    if (Number.isFinite(savedPosition?.left) && Number.isFinite(savedPosition?.top)) {
+      positionPanel(savedPosition.left, savedPosition.top, false);
+    }
+    window.addEventListener("resize", () => {
+      if (!panel) return;
+      const rect = panel.getBoundingClientRect();
+      // Bei Groessenaenderung den verschobenen Header erreichbar halten.
+      if (panel.style.left) positionPanel(rect.left, rect.top);
+    });
     repaintFields();
     setInterval(updatePanel, 1000);
   }
