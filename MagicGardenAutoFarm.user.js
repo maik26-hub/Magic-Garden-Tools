@@ -179,6 +179,15 @@
     }
     persistTimer();
   }
+  // Timer kann im laufenden Betrieb zurueckgesetzt werden, ohne den Bot anzuhalten.
+  // Ein erneuter Start/F5 setzt anschliessend bei 00:00:00 an.
+  function resetTimer() {
+    elapsedMs = 0;
+    if (timerStartAt !== null) timerStartAt = Date.now();
+    persistTimer();
+    updatePanel();
+    return formatTime(runtimeMs());
+  }
   function formatTime(ms) {
     const seconds = Math.floor(Math.max(0, ms) / 1000);
     return [Math.floor(seconds / 3600), Math.floor(seconds / 60) % 60, seconds % 60]
@@ -899,6 +908,10 @@
     stopBtn.style.background = "#a93232";
     controls.append(startBtn, stopBtn);
     body.appendChild(controls);
+    const resetButton = btn("↺ Laufzeit zurücksetzen", resetTimer);
+    resetButton.title = "Setzt nur den Laufzeit-Timer zurück. Ernten, Verkäufe und Coins bleiben erhalten.";
+    resetButton.style.cssText += ";display:block;width:100%;margin:-3px 0 14px";
+    body.appendChild(resetButton);
 
     const toggles = document.createElement("div");
     toggles.style.cssText = "border-top:1px solid #355342;padding:10px 0";
@@ -1016,7 +1029,7 @@
 
   // ===== Konsole =====
   window.MGAutoFarmV13 = {
-    state, cfg, prefs, start, stop, selectedSlots, getDiagnostics, checkForUpdate, setNumberPreference,
+    state, cfg, prefs, start, stop, resetTimer, selectedSlots, getDiagnostics, checkForUpdate, setNumberPreference,
     status() {
       const details = {
         Aktiv: state.running,
