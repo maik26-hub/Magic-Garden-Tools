@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         Magic Garden AutoFarm
 // @namespace    mg-autofarm-local
-// @version      13.1.0
+// @version      13.2.0
 // @updateURL   https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js
 // @downloadURL https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js
-// @description  V13.1: Verschiebbares Menue, adaptive Ernte, Auto-Sell, Timer, Anti-AFK, Auto-Reconnect, F8, Auto-Resume, Recovery
+// @description  V13.2: Self-Healing, Einstellungen, Updates, Diagnose plus V13.1-Funktionen
 // @match        https://magicgarden.gg/*
 // @run-at       document-start
 // @grant        none
@@ -82,13 +82,47 @@
   }
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+  const VERSION = "13.2.0";
+  const UPDATE_URL = "https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js";
+  const NUMBER_FIELDS = Object.freeze({
+    sellThreshold: { min: 5, max: 200, step: 1 },
+    sellIntervalMs: { min: 500, max: 30000, step: 500 },
+    minHarvestDelayMs: { min: 50, max: 1000, step: 5 },
+    maxHarvestDelayMs: { min: 100, max: 3000, step: 5 },
+    stallAfterMs: { min: 30000, max: 300000, step: 1000 }
+  });
+  function validatedNumber(input, fallback, bounds) {
+    const value = Number(input);
+    if (!Number.isFinite(value)) return fallback;
+    return Math.round(clamp(value, bounds.min, bounds.max) / bounds.step) * bounds.step;
+  }
   const savedPrefs = readJSON(localStorage, KEYS.prefs, {});
   const prefs = {
     antiAfk: savedPrefs.antiAfk !== false,
     autoReload: savedPrefs.autoReload !== false,
-    adaptive: savedPrefs.adaptive !== false
+    adaptive: savedPrefs.adaptive !== false,
+    selfHealing: savedPrefs.selfHealing !== false,
+    sellThreshold: validatedNumber(savedPrefs.sellThreshold, cfg.sellThreshold, NUMBER_FIELDS.sellThreshold),
+    sellIntervalMs: validatedNumber(savedPrefs.sellIntervalMs, cfg.sellEveryMs, NUMBER_FIELDS.sellIntervalMs),
+    minHarvestDelayMs: validatedNumber(savedPrefs.minHarvestDelayMs, cfg.adaptive.minMs, NUMBER_FIELDS.minHarvestDelayMs),
+    maxHarvestDelayMs: validatedNumber(savedPrefs.maxHarvestDelayMs, cfg.adaptive.maxMs, NUMBER_FIELDS.maxHarvestDelayMs),
+    stallAfterMs: validatedNumber(savedPrefs.stallAfterMs, 90000, NUMBER_FIELDS.stallAfterMs)
   };
+  prefs.minHarvestDelayMs = Math.min(prefs.minHarvestDelayMs, prefs.maxHarvestDelayMs);
   const persistPrefs = () => storeJSON(localStorage, KEYS.prefs, prefs);
+  function setNumberPreference(key, input) {
+    const limits = NUMBER_FIELDS[key];
+    if (!limits) throw new Error("Unbekannte Einstellung");
+    prefs[key] = validatedNumber(input, prefs[key], limits);
+    if (prefs.minHarvestDelayMs > prefs.maxHarvestDelayMs) {
+      if (key === "minHarvestDelayMs") prefs.maxHarvestDelayMs = prefs.minHarvestDelayMs;
+      else prefs.minHarvestDelayMs = prefs.maxHarvestDelayMs;
+    }
+    state.currentDelay = clamp(state.currentDelay, prefs.minHarvestDelayMs, prefs.maxHarvestDelayMs);
+    persistPrefs();
+    updatePanel();
+    return prefs[key];
+  }
 
   const state = {
     running: false,
@@ -120,7 +154,12 @@
     lastLoopAt: null,
     wakeLagMs: 0,
     autoResumed: false,
-    reloadRequested: false
+    reloadRequested: false,
+    lastHarvestAt: null,
+    ripeSince: null,
+    lastSelfHealAt: null,
+    selfHealAttempts: 0,
+    selfHealChecks: 0
   };
 
   // ===== Laufzeit: Start/Stop; nach F5 im selben Tab fortsetzen =====
@@ -229,13 +268,13 @@
     const before = state.currentDelay;
     if (!successful) {
       state.successStreak = 0;
-      state.currentDelay = Math.min(a.maxMs, before + a.slowDownMs * 2);
+      state.currentDelay = Math.min(prefs.maxHarvestDelayMs, before + a.slowDownMs * 2);
     } else if (responseMs >= a.slowResponseMs) {
       state.successStreak = 0;
-      state.currentDelay = Math.min(a.maxMs, before + a.slowDownMs);
+      state.currentDelay = Math.min(prefs.maxHarvestDelayMs, before + a.slowDownMs);
     } else if (responseMs <= a.fastResponseMs) {
       if (++state.successStreak >= a.successesToSpeedUp) {
-        state.currentDelay = Math.max(a.minMs, before - a.speedUpMs);
+        state.currentDelay = Math.max(prefs.minHarvestDelayMs, before - a.speedUpMs);
         state.successStreak = 0;
       }
     } else {
@@ -309,6 +348,10 @@
     });
     state.harvested += result.itemGains?.length || 1;
     state.cooldowns.set(target.key, Date.now() + cfg.harvestedSlotCooldownMs);
+    state.lastHarvestAt = Date.now();
+    state.ripeSince = null;
+    state.lastSelfHealAt = null;
+    state.selfHealAttempts = 0;
   }
   async function sell() {
     const result = await sendCommand({ type: "SellAllCrops" });
@@ -455,6 +498,44 @@
     await waitTick(Math.min(15000, 1000 * 2 ** Math.min(state.consecutiveErrors, 4)));
   }
 
+  // ===== Self-Healing: nur bei ANHALTEND erntebereiten, ungeschuetzten Pflanzen =====
+  // Geschuetzte Pflanzen und aktive Cooldowns zaehlen nicht als Stau.
+  // Der erste Eingriff ist eine Sicherheitspause; erst ein zweiter Stau darf
+  // den bestehenden, begrenzten Reload-Weg benutzen (wenn aktiviert).
+  function checkSelfHealing(target) {
+    if (!prefs.selfHealing || !target) {
+      state.ripeSince = null;
+      state.selfHealAttempts = 0;
+      return false;
+    }
+    const now = Date.now();
+    if (state.ripeSince === null) state.ripeSince = now;
+    if (now - state.ripeSince < prefs.stallAfterMs) return false;
+    if (state.lastSelfHealAt !== null &&
+        now - state.lastSelfHealAt < prefs.stallAfterMs) return false;
+
+    state.lastSelfHealAt = now;
+    state.selfHealAttempts++;
+    state.selfHealChecks++;
+
+    // Nur ABGELAUFENE Cooldowns bereinigen. Pflanzenschutz bleibt intakt.
+    for (const [key, until] of state.cooldowns) {
+      if (until <= now) state.cooldowns.delete(key);
+    }
+    state.successStreak = 0;
+    state.currentDelay = Math.min(prefs.maxHarvestDelayMs,
+      Math.max(state.currentDelay, cfg.adaptive.initialMs + 50));
+
+    if (state.selfHealAttempts >= 2 && prefs.autoReload && state.connectedOnce) {
+      state.connection = "Self-Healing: kontrollierter Reconnect";
+      if (controlledReload()) return true;
+    }
+    state.connection = "Self-Healing: kurze Sicherheitspause";
+    state.breakerUntil = Math.max(state.breakerUntil, now + 3000);
+    console.warn("[MG V13.2] Erntestau erkannt: pruefe Verbindung/Status, pausiere kurz.");
+    return true;
+  }
+
   // ===== Steuerung; genau ein Befehl gleichzeitig =====
   async function loop() {
     if (state.busy) return;
@@ -474,9 +555,9 @@
             continue;
           }
           state.connection = "Verbunden";
-          if (Date.now() - lastSellCheck >= cfg.sellEveryMs) {
+          if (Date.now() - lastSellCheck >= prefs.sellIntervalMs) {
             lastSellCheck = Date.now();
-            if (getProduce().length >= cfg.sellThreshold) {
+            if (getProduce().length >= prefs.sellThreshold) {
               await sell();
               state.consecutiveErrors = 0;
               await waitTick(500);
@@ -485,7 +566,12 @@
           }
           attempted = findReadyCrop();
           if (!attempted) {
+            checkSelfHealing(null);
             await waitTick(scanDelay());
+            continue;
+          }
+          if (checkSelfHealing(attempted)) {
+            await waitTick(500);
             continue;
           }
           await harvest(attempted);
@@ -532,11 +618,97 @@
   }
   window.addEventListener("keydown", onHotkey, true);
 
+  // ===== Update-Erkennung: Lesender Abruf; Installation macht Tampermonkey =====
+  const updateInfo = { checkedAt: 0, status: "Noch nicht geprueft", newer: null };
+  let updateRunning = false;
+  function parseVersion(source) {
+    return String(source).match(/^\s*\/\/\s*@version\s+(\d+\.\d+\.\d+)\b/m)?.[1] || null;
+  }
+  function compareVersions(a, b) {
+    const x = a.split(".").map(Number), y = b.split(".").map(Number);
+    for (let i = 0; i < 3; i++) {
+      if (x[i] !== y[i]) return x[i] > y[i] ? 1 : -1;
+    }
+    return 0;
+  }
+  async function checkForUpdate(force = false) {
+    if (updateRunning || (!force && Date.now() - updateInfo.checkedAt < 6 * 3600000)) {
+      return { ...updateInfo };
+    }
+    updateRunning = true;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 6000);
+    try {
+      const response = await fetch(UPDATE_URL, { cache: "no-store", signal: controller.signal });
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      const remote = parseVersion(await response.text());
+      if (!remote) throw new Error("Versionsnummer fehlt");
+      updateInfo.newer = compareVersions(remote, VERSION) > 0 ? remote : null;
+      updateInfo.status = updateInfo.newer
+        ? "Update verfuegbar: V" + remote
+        : "Aktuell (main: V" + remote + ")";
+    } catch (error) {
+      updateInfo.status = "Update-Check nicht moeglich";
+      updateInfo.newer = null;
+    } finally {
+      clearTimeout(timeout);
+      updateInfo.checkedAt = Date.now();
+      updateRunning = false;
+      updatePanel();
+    }
+    return { ...updateInfo };
+  }
+
+  // ===== Diagnose OHNE IDs, Chat, Koordinaten, Inventarinhalte oder Token =====
+  function getDiagnostics() {
+    const tiles = window.__qpmGardenSnapshot__?.tileObjects;
+    const errorKind = !state.lastError ? "none" :
+      looksProtected(state.lastError) ? "protected" :
+      isNetworkError(state.lastError) ? "connection" : "other";
+    return {
+      tool: "Magic Garden AutoFarm",
+      version: VERSION,
+      timestamp: new Date().toISOString(),
+      running: state.running,
+      connection: state.connection,
+      socketOpen: !!getSocket(),
+      snapshotAvailable: !!tiles,
+      snapshotTileCount: tiles ? Object.keys(tiles).length : 0,
+      tabHidden: !!document.hidden,
+      selectedFieldCount: selectedSlots().size,
+      readyProduceCount: getProduce().length,
+      harvestedCount: state.harvested,
+      salesCount: state.sold,
+      errorCount: state.errors,
+      errorCategory: errorKind,
+      protectedSkipCount: state.protectedSkips,
+      reconnectCount: state.reconnects,
+      selfHealingChecks: state.selfHealChecks,
+      adaptiveDelayMs: prefs.adaptive ? state.currentDelay : cfg.adaptive.initialMs,
+      averageServerResponseMs: Math.round(state.averageResponseMs),
+      runtimeSeconds: Math.floor(runtimeMs() / 1000)
+    };
+  }
+  async function copyDiagnostics() {
+    const report = JSON.stringify(getDiagnostics(), null, 2);
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error("Clipboard API fehlt");
+      await navigator.clipboard.writeText(report);
+      if (diagnosticStatus) diagnosticStatus.textContent = "Diagnose kopiert (ohne private Spieldaten).";
+    } catch {
+      console.info("[MG V13.2] Diagnose zum Kopieren:\n" + report);
+      if (diagnosticStatus) diagnosticStatus.textContent = "Kopieren gesperrt: Diagnose steht in der Konsole.";
+    }
+  }
+
   // ===== Bedienoberfläche =====
   let panel = null;
   let body = null;
   let fieldCount = null;
   let headline = null;
+  let updateStatus = null;
+  let updateLink = null;
+  let diagnosticStatus = null;
   const fieldButtons = [];
   let collapsed = readValue(localStorage, KEYS.collapsed) === "true";
 
@@ -632,7 +804,7 @@
     const status = panel.querySelector("#mg13-status");
     const stats = panel.querySelector("#mg13-stats");
     if (status) status.textContent = state.running ? "🟢 Aktiv" : state.busy ? "🟡 Stoppt …" : "🔴 Gestoppt";
-    if (headline) headline.textContent = state.running ? "🌱 V13.1 · Aktiv" : "🌱 Magic Garden V13.1";
+    if (headline) headline.textContent = state.running ? "🌱 V13.2 · Aktiv" : "🌱 Magic Garden V13.2";
     if (stats) stats.textContent =
       `Felder: ${selectedSlots().size} / 200\n` +
       `Geerntet: ${state.harvested}\n` +
@@ -647,8 +819,11 @@
       `🔁 Reconnects: ${state.reconnects}\n` +
       `🖥 Tab: ${document.hidden ? "Hintergrund (gedrosselt möglich)" : "Sichtbar"}\n` +
       `🛡 Anti-AFK-Impulse: ${state.antiAfkTicks} (nicht garantiert)\n` +
+      `🩺 Self-Healing: ${prefs.selfHealing ? "An" : "Aus"} (${state.selfHealChecks} Prüfungen)\n` +
       `⌨ F8 = Start / Stop`;
     if (fieldCount) fieldCount.textContent = `Ausgewählt: ${selectedSlots().size} / 200`;
+    if (updateStatus) updateStatus.textContent = updateInfo.status;
+    if (updateLink) updateLink.style.display = updateInfo.newer ? "inline-block" : "none";
   }
   function repaintFields() {
     for (const { el, side, i } of fieldButtons) {
@@ -688,7 +863,7 @@
     const header = document.createElement("div");
     header.style.cssText = "display:flex;justify-content:space-between;align-items:center;gap:8px";
     headline = document.createElement("strong");
-    headline.textContent = "🌱 Magic Garden V13.1";
+    headline.textContent = "🌱 Magic Garden V13.2";
     headline.style.fontSize = "16px";
     const toggle = btn(collapsed ? "+" : "−", () => {
       collapsed = !collapsed;
@@ -729,6 +904,7 @@
     toggles.style.cssText = "border-top:1px solid #355342;padding:10px 0";
     toggles.append(
       checkbox("Adaptive Geschwindigkeit", prefs.adaptive, v => { prefs.adaptive = v; }),
+      checkbox("Self-Healing bei Erntestau", prefs.selfHealing, v => { prefs.selfHealing = v; }),
       checkbox("Anti-AFK-Impulse (experimentell)", prefs.antiAfk, v => { prefs.antiAfk = v; }),
       checkbox("Auto-Neuladen bei längerem Offline", prefs.autoReload, v => { prefs.autoReload = v; })
     );
@@ -737,6 +913,62 @@
     note.style.cssText = "color:#a8b9ae;display:block;line-height:1.4;margin-top:5px";
     toggles.appendChild(note);
     body.appendChild(toggles);
+
+    const settingsPanel = document.createElement("div");
+    settingsPanel.style.cssText = "border-top:1px solid #355342;padding:12px 0";
+    const settingsTitle = document.createElement("strong");
+    settingsTitle.textContent = "⚙ Einstellungen (automatisch gespeichert)";
+    settingsPanel.appendChild(settingsTitle);
+    function numberControl(label, key, factor = 1) {
+      const row = document.createElement("label");
+      row.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:6px;margin:9px 0;font-size:12px";
+      const text = document.createElement("span");
+      text.textContent = label;
+      const input = document.createElement("input");
+      input.type = "number";
+      input.min = String(NUMBER_FIELDS[key].min / factor);
+      input.max = String(NUMBER_FIELDS[key].max / factor);
+      input.step = String(NUMBER_FIELDS[key].step / factor);
+      input.value = String(prefs[key] / factor);
+      input.style.cssText = "width:88px;padding:5px;color:#e9fff1;background:#20372a;border:1px solid #456052;border-radius:5px";
+      input.addEventListener("change", () => {
+        input.value = String(setNumberPreference(key, Number(input.value) * factor) / factor);
+      });
+      row.append(text, input);
+      return row;
+    }
+    settingsPanel.append(
+      numberControl("Auto-Sell ab Items", "sellThreshold"),
+      numberControl("Verkaufscheck (Sek.)", "sellIntervalMs", 1000),
+      numberControl("Min. Erntepause (ms)", "minHarvestDelayMs"),
+      numberControl("Max. Erntepause (ms)", "maxHarvestDelayMs"),
+      numberControl("Self-Healing nach (Sek.)", "stallAfterMs", 1000)
+    );
+    body.appendChild(settingsPanel);
+
+    const tools = document.createElement("div");
+    tools.style.cssText = "border-top:1px solid #355342;padding:12px 0";
+    const updateHeading = document.createElement("strong");
+    updateHeading.textContent = "🔄 GitHub-Update";
+    updateStatus = document.createElement("div");
+    updateStatus.style.cssText = "margin:8px 0;color:#a8b9ae;font-size:12px";
+    updateStatus.textContent = updateInfo.status;
+    const updateControls = document.createElement("div");
+    updateControls.style.cssText = "display:flex;gap:8px;align-items:center";
+    updateControls.appendChild(btn("Update prüfen", () => { void checkForUpdate(true); }));
+    updateLink = document.createElement("a");
+    updateLink.href = UPDATE_URL;
+    updateLink.target = "_blank";
+    updateLink.rel = "noopener noreferrer";
+    updateLink.textContent = "Installieren";
+    updateLink.style.cssText = "display:none;color:#91efb4;font-size:12px";
+    updateControls.appendChild(updateLink);
+    diagnosticStatus = document.createElement("div");
+    diagnosticStatus.style.cssText = "font-size:11px;color:#a8b9ae;margin:6px 0";
+    const copyButton = btn("📋 Diagnose kopieren (datensparsam)", () => { void copyDiagnostics(); });
+    tools.append(updateHeading, updateStatus, updateControls, copyButton, diagnosticStatus);
+    copyButton.style.marginTop = "10px";
+    body.appendChild(tools);
 
     const fields = document.createElement("div");
     fields.style.cssText = "border-top:1px solid #355342;padding-top:12px";
@@ -778,11 +1010,13 @@
     });
     repaintFields();
     setInterval(updatePanel, 1000);
+    // Status einmal beim Laden prüfen; danach nur auf Knopfdruck bzw. spaeter pro Sitzung.
+    setTimeout(() => { void checkForUpdate(false); }, 2000);
   }
 
   // ===== Konsole =====
   window.MGAutoFarmV13 = {
-    state, cfg, prefs, start, stop, selectedSlots,
+    state, cfg, prefs, start, stop, selectedSlots, getDiagnostics, checkForUpdate, setNumberPreference,
     status() {
       const details = {
         Aktiv: state.running,
@@ -800,6 +1034,7 @@
         Reconnects: state.reconnects,
         SchutzUebersprungen: state.protectedSkips,
         Fehler: state.errors,
+        SelfHealingPruefungen: state.selfHealChecks,
         LetzterFehler: state.lastError
       };
       console.table(details);
@@ -814,5 +1049,5 @@
   if (readValue(sessionStorage, KEYS.resume) === "1") {
     start({ auto: true });
   }
-  console.log("✅ Magic Garden AutoFarm V13 geladen (Garden Companion erforderlich).");
+  console.log("✅ Magic Garden AutoFarm V13.2 geladen (Garden Companion erforderlich).");
 })();
