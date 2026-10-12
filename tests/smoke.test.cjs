@@ -32,7 +32,7 @@ function setup(prefs = {}) {
   return { api: window.MGAutoFarmV13, localStorage, context };
 }
 
-test('V13.2.1 initializes and retains selection and prior controls', () => {
+test('V13.2.2 initializes and retains selection and prior controls', () => {
   const { api } = setup();
   assert.ok(api);
   assert.equal(api.selectedSlots().size, 3);
@@ -58,7 +58,7 @@ test('settings are validated and persisted', () => {
 test('diagnostics exclude raw user/game identifiers', () => {
   const { api } = setup();
   const report = api.getDiagnostics();
-  assert.equal(report.version, '13.2.1');
+  assert.equal(report.version, '13.2.2');
   assert.equal(report.selectedFieldCount, 3);
   assert.ok(!Object.keys(report).some(k =>
     /cookie|user|account|itemId|cropId|requestId|inventoryItems/i.test(k)
@@ -144,4 +144,94 @@ test('a harvest already in flight does not count toward a freshly reset session'
   assert.equal(api.state.harvested, 0);
   assert.ok(api.state.cooldowns.has('0:0'));
   api.stop();
+});
+
+
+function paintHarness() {
+  const start = source.indexOf('  function installFieldPainting(container) {');
+  const end = source.indexOf('\n  function createPanel() {', start);
+  assert.ok(start >= 0 && end > start, 'real drag painter implementation exists');
+  const implementation = source.slice(start, end);
+
+  const selection = { left: new Set([0, 1]), right: new Set([0]) };
+  const layout = [['left', 0], ['left', 1], ['left', 2], ['right', 0], ['right', 1]];
+  const buttons = new Map(layout.map(([side, index]) => {
+    const el = {
+      dataset: { side, index: String(index) },
+      style: {},
+      closest() { return this; }
+    };
+    return [side + ':' + index, el];
+  }));
+  const handlers = new Map();
+  let saves = 0, updates = 0, capture = null;
+  const fields = {
+    contains: el => [...buttons.values()].includes(el),
+    addEventListener: (type, callback) => handlers.set(type, callback),
+    setPointerCapture: id => { capture = id; },
+    hasPointerCapture: id => capture === id,
+    releasePointerCapture: () => { capture = null; }
+  };
+  const document = {
+    elementFromPoint(x) {
+      const item = layout[Math.floor(x / 20)];
+      return item ? buttons.get(item[0] + ':' + item[1]) : null;
+    }
+  };
+  const window = { addEventListener() {} };
+  const fieldCount = { textContent: '' };
+  const factory = new Function(
+    'selection', 'saveSelection', 'updatePanel',
+    'fieldCount', 'document', 'window',
+    implementation + '\nreturn installFieldPainting;'
+  );
+  factory(selection, () => saves++, () => updates++,
+    fieldCount, document, window)(fields);
+
+  const pointer = (type, x, key) => ({
+    type, button: 0, isPrimary: true, pointerId: 1,
+    clientX: x, clientY: 10,
+    target: buttons.get(key),
+    preventDefault() {}
+  });
+  return {
+    selection, handlers, pointer,
+    get saves() { return saves; },
+    get updates() { return updates; },
+    fieldCount, buttons
+  };
+}
+test('dragging across both plots deselects fields based on start tile, without toggling twice', () => {
+  const h = paintHarness();
+  h.handlers.get('pointerdown')(h.pointer('pointerdown', 10, 'left:0'));
+  h.handlers.get('pointermove')(h.pointer('pointermove', 90, 'left:0'));
+  h.handlers.get('pointermove')(h.pointer('pointermove', 20, 'left:0'));
+  h.handlers.get('pointerup')(h.pointer('pointerup', 90, 'left:0'));
+  assert.equal(h.selection.left.size, 0);
+  assert.equal(h.selection.right.size, 0);
+  assert.equal(h.saves, 1);
+  assert.equal(h.fieldCount.textContent, 'Ausgewählt: 0 / 200');
+});
+test('dragging from empty field selects all traversed tiles, including other plot', () => {
+  const h = paintHarness();
+  h.handlers.get('pointerdown')(h.pointer('pointerdown', 50, 'left:2'));
+  h.handlers.get('pointermove')(h.pointer('pointermove', 90, 'left:2'));
+  h.handlers.get('pointerup')(h.pointer('pointerup', 90, 'left:2'));
+  assert.equal(h.selection.left.has(2), true);
+  assert.equal(h.selection.right.has(1), true);
+  assert.equal(h.selection.left.has(0), true);
+  assert.equal(h.selection.left.has(1), true);
+  assert.equal(h.saves, 1);
+});
+test('a single pointer tap selects one field and a cancelled drag still persists changes', () => {
+  const h = paintHarness();
+  h.handlers.get('pointerdown')(h.pointer('pointerdown', 50, 'left:2'));
+  h.handlers.get('pointercancel')(h.pointer('pointercancel', 50, 'left:2'));
+  assert.equal(h.selection.left.has(2), true);
+  assert.equal(h.saves, 1);
+});
+test('field buttons keep keyboard click support and have touch-safe pointer styling', () => {
+  assert.match(source, /if \(event\.detail !== 0\) return;/);
+  assert.match(source, /touch-action:none/);
+  assert.match(source, /installFieldPainting\(fields\)/);
 });
