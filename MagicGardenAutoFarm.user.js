@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         Magic Garden AutoFarm
 // @namespace    mg-autofarm-local
-// @version      13.2.3
+// @version      14.0.3
 // @updateURL   https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js
 // @downloadURL https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js
-// @description  V13.2.3: Rejected-Harvest-Fix, Drag-Feldauswahl, Auto-Sell, Self-Healing
+// @description  V14.0.3: standalone auto-farm, direct V13 update, AFK watchdog and safe reconnect/reload recovery
 // @match        https://magicgarden.gg/*
 // @run-at       document-start
 // @grant        none
@@ -13,9 +13,10 @@
 (() => {
   "use strict";
 
-  // WICHTIG: Nur dieses AutoFarm-Skript aktivieren; Garden Companion aktiv lassen.
-  // Garden Companion liefert Garden-Snapshot, Inventar, WS-Sequenz und Pflanzenschutz.
-  // V13 umgeht den Schutz NICHT.
+  // V14: offizielle Aktualisierung der bisherigen V13-AutoFarm ueber denselben
+  // Tampermonkey-Namen, Namespace und GitHub-URL (keine zweite Installation).
+  // QPM, Garden Companion und Arie's Mod sind fuer diese AutoFarm nicht noetig.
+  // WICHTIG: Nur selbst gematchte Spieler-Slots verwenden. Bei fehlenden Daten NICHT ernten.
   if (window.MGAutoFarmV13) return;
   if (window.MGAutoFarmV12 || window.MGAutoFarmV11) {
     console.warn("[MG V13] Bitte alte AutoFarm-Skripte deaktivieren und neu laden.");
@@ -29,6 +30,7 @@
     resume: "magic_garden_v13_should_resume",           // sessionStorage: pro Tab
     timer: "magic_garden_v13_elapsed_ms",               // sessionStorage
     reloads: "magic_garden_v13_reload_history",         // sessionStorage
+    lastReloadReason: "magic_garden_v14_last_reload_reason",
     panelPosition: "magic_garden_v13_panel_position"   // localStorage
   };
 
@@ -46,6 +48,8 @@
     protectedSlotCooldownMs: 30 * 60000,
     antiAfkEveryMs: 50 * 1000,
     antiAfkOnlyAfterNoRealInputMs: 45 * 1000,
+    // AFK-Impulse im eigenen Takt, statt vom Ernte-Loop abzuhaengen.
+    afkWatchdogMs: 10 * 1000,
     offlineReloadAfterMs: 90 * 1000,
     reloadLimit: 3,
     reloadWindowMs: 15 * 60000,
@@ -85,7 +89,7 @@
   }
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-  const VERSION = "13.2.3";
+  const VERSION = "14.0.3";
   const UPDATE_URL = "https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js";
   const NUMBER_FIELDS = Object.freeze({
     sellThreshold: { min: 5, max: 200, step: 1 },
@@ -101,10 +105,12 @@
   }
   const savedPrefs = readJSON(localStorage, KEYS.prefs, {});
   const prefs = {
-    antiAfk: savedPrefs.antiAfk !== false,
-    autoReload: savedPrefs.autoReload !== false,
+    antiAfk: savedPrefs.antiAfk === true,
+    autoReload: savedPrefs.autoReload === true,
     adaptive: savedPrefs.adaptive !== false,
     selfHealing: savedPrefs.selfHealing !== false,
+    protectMutations: savedPrefs.protectMutations !== false,
+    protectMaxSize: savedPrefs.protectMaxSize !== false,
     sellThreshold: validatedNumber(savedPrefs.sellThreshold, cfg.sellThreshold, NUMBER_FIELDS.sellThreshold),
     sellIntervalMs: validatedNumber(savedPrefs.sellIntervalMs, cfg.sellEveryMs, NUMBER_FIELDS.sellIntervalMs),
     minHarvestDelayMs: validatedNumber(savedPrefs.minHarvestDelayMs, cfg.adaptive.minMs, NUMBER_FIELDS.minHarvestDelayMs),
@@ -150,12 +156,16 @@
     connection: "Warte auf Spiel",
     connectedOnce: false,
     offlineSince: null,
+    notReadySince: null,
+    reloadLimitReached: false,
+    lastReloadReason: readValue(sessionStorage, KEYS.lastReloadReason, "") || "",
     reconnects: 0,
     lastOnline: null,
     hidden: typeof document !== "undefined" ? document.hidden : false,
     lastRealInput: Date.now(),
     antiAfkTicks: 0,
     lastAntiAfk: null,
+    antiAfkStatus: "Nicht aktiviert",
     lastActivityAt: null,
     lastLoopAt: null,
     wakeLagMs: 0,
@@ -252,31 +262,211 @@
     return result;
   }
 
-  // ===== Spielzustand (nur eigene Garden-Companion-Daten) =====
+  // ===== Eigene Spielanbindung (keine Dritt-Scripts) =====
+  // Die Schnittstelle MagicCircle_RoomConnection gehoert zum Spiel.
+  // Daten stammen ausschliesslich aus dessen subscribeToPatches + Welcome.
+  const bridge = {
+    socket: null, connection: null, unsubscribe: null, playerId: null,
+    lastFullState: null, garden: null, inventory: null,
+    sequence: -1, frontier: -1, lastSnapshotAt: 0, observedSockets: 0
+  };
+
+  function readFrontier() {
+    const value = Number(window.MagicCircle_RoomConnection
+      ?.lastDistributedRoomPublication?.executedCommandSequence);
+    if (Number.isInteger(value) && value >= 0) {
+      bridge.frontier = Math.max(bridge.frontier, value);
+    }
+    return bridge.frontier;
+  }
+
+  function chooseOwnSlot(full) {
+    if (!full || typeof full !== "object") return;
+    bridge.lastFullState = full;
+    const id = bridge.playerId || full.selfPlayerId ||
+      full.data?.selfPlayerId || full.child?.data?.selfPlayerId;
+    const slots = full.child?.data?.userSlots;
+    if (!id || !Array.isArray(slots)) {
+      bridge.garden = null;
+      bridge.inventory = null;
+      return;
+    }
+    let own = slots.find(slot => slot && (
+      slot.userId === id || slot.playerId === id || slot.data?.playerId === id
+    ));
+    if (!own) {
+      const databaseId = full.data?.players?.find(p => p?.id === id)?.databaseUserId;
+      if (databaseId) own = slots.find(slot => slot?.data?.databaseUserId === databaseId ||
+        slot?.data?.userId === databaseId);
+    }
+    // Bei unklarer Zuordnung lieber warten als versehentlich einen anderen Garten ernten.
+    bridge.garden = own?.data?.garden?.tileObjects || null;
+    bridge.inventory = own?.data?.inventory || null;
+    if (bridge.garden && bridge.inventory) bridge.lastSnapshotAt = Date.now();
+  }
+
+  function observeSocket(ws) {
+    if (!ws || ws === bridge.socket) return;
+    if (!String(ws.url || "").includes("/api/rooms/")) return;
+    bridge.socket = ws;
+    bridge.sequence = -1;
+    bridge.frontier = -1;
+    bridge.playerId = null;
+    bridge.garden = null;
+    bridge.inventory = null;
+    bridge.lastFullState = null;
+    bridge.lastSnapshotAt = 0;
+    bridge.observedSockets++;
+    ws.addEventListener("close", () => {
+      // Ein altes Socket darf die neue Verbindung NICHT als offline markieren.
+      if (bridge.socket !== ws) return;
+      bridge.garden = null;
+      bridge.inventory = null;
+      bridge.lastFullState = null;
+      bridge.sequence = -1;
+      bridge.frontier = -1;
+      bridge.lastSnapshotAt = 0;
+      if (state.running) {
+        if (state.offlineSince === null) state.offlineSince = Date.now();
+        if (state.notReadySince === null) state.notReadySince = Date.now();
+        state.connection = "WebSocket getrennt – warte auf Reconnect";
+      }
+    });
+    // Der Serverzaehler gehoert zu jeder Verbindung separat.
+    ws.addEventListener("message", event => {
+      const data = event.data;
+      if (typeof data !== "string") return;
+      if (data.includes('"selfPlayerId"') && data.includes('"executedCommandSequence"')) {
+        try {
+          const msg = JSON.parse(data);
+          const seq = Number(msg?.executedCommandSequence);
+          if (typeof msg?.selfPlayerId === "string") {
+            bridge.playerId = msg.selfPlayerId;
+            chooseOwnSlot(bridge.lastFullState);
+          }
+          if (Number.isInteger(seq) && seq >= 0) {
+            bridge.sequence = seq + 1;
+            bridge.frontier = seq;
+          }
+        } catch { /* Kein Welcome-Frame */ }
+      }
+      if (bridge.frontier < 0) {
+        const key = '"executedCommandSequence":';
+        const at = data.indexOf(key);
+        if (at >= 0) {
+          const fragment = data.slice(at + key.length, at + key.length + 16);
+          const digits = fragment.match(/^\d+/)?.[0];
+          if (digits) bridge.frontier = Number(digits);
+        }
+      }
+      if (data.length < 20000 && data.includes('"invalid_sequence"')) {
+        try {
+          const frame = JSON.parse(data);
+          if (frame?.type === "QuinoaCommandResult" && frame.code === "invalid_sequence") {
+            readFrontier();
+            if (bridge.frontier >= 0) bridge.sequence = bridge.frontier + 1;
+          }
+        } catch { /* Unlesbare Nachricht */ }
+      }
+    });
+
+    // EIN gemeinsamer Sequenzzaehler fuer Spielaktionen und eigene Befehle.
+    // Alle Befehle laufen weiterhin ueber den normalen Socket des Spiels.
+    const nativeSend = ws.send;
+    ws.send = function(payload) {
+      if (typeof payload !== "string" || !payload.includes('"QuinoaCommand"')) {
+        return nativeSend.call(this, payload);
+      }
+      let frame;
+      try { frame = JSON.parse(payload); }
+      catch { return nativeSend.call(this, payload); }
+      if (frame?.type !== "QuinoaCommand") return nativeSend.call(this, payload);
+      readFrontier();
+      if (bridge.sequence <= 0) {
+        const incoming = Number(frame.commandSequence);
+        if (Number.isInteger(incoming) && incoming > 0) bridge.sequence = incoming;
+      }
+      if (bridge.sequence <= 0 && bridge.frontier >= 0) {
+        bridge.sequence = bridge.frontier + 1;
+      }
+      if (bridge.sequence <= 0) return nativeSend.call(this, payload);
+      const next = Math.max(bridge.sequence, bridge.frontier + 1);
+      bridge.sequence = next + 1;
+      frame.commandSequence = next;
+      return nativeSend.call(this, JSON.stringify(frame));
+    };
+  }
+
+  function installStandaloneHook() {
+    const Native = window.WebSocket;
+    if (typeof Native !== "function") return;
+    function GameSocket(...args) {
+      const socket = new Native(...args);
+      if (String(args[0] ?? "").includes("/api/rooms/")) observeSocket(socket);
+      return socket;
+    }
+    Object.setPrototypeOf(GameSocket, Native);
+    GameSocket.prototype = Native.prototype;
+    window.WebSocket = GameSocket;
+  }
+  installStandaloneHook();
+
+  function watchGameConnection() {
+    const connection = window.MagicCircle_RoomConnection;
+    if (!connection) return;
+    if (connection.currentWebSocket && connection.currentWebSocket !== bridge.socket) {
+      observeSocket(connection.currentWebSocket);
+    }
+    if (bridge.connection === connection) return;
+    if (typeof bridge.unsubscribe === "function") {
+      try { bridge.unsubscribe(); } catch {}
+    }
+    bridge.connection = connection;
+    bridge.unsubscribe = null;
+    if (typeof connection.subscribeToPatches === "function") {
+      try {
+        bridge.unsubscribe = connection.subscribeToPatches((_patches, full) => {
+          chooseOwnSlot(full);
+        });
+      } catch (err) {
+        console.warn("[MG Standalone] Spielzustand noch nicht bereit:", err?.message);
+      }
+    }
+  }
+  watchGameConnection();
+  setInterval(watchGameConnection, 300);
+
   function getSocket() {
-    return [window.quinoaWS, window.mgBot?.ws]
-      .find(ws => ws && ws.readyState === WebSocket.OPEN) || null;
+    watchGameConnection();
+    const ws = bridge.socket;
+    return ws && ws.readyState === 1 ? ws : null;
   }
   function getInventory() {
-    return window.__gardenCompanionState?.slot?.data?.inventory;
+    return bridge.inventory;
   }
   function getProduce() {
     const inv = getInventory();
-    const favorites = new Set(inv?.favoritedItemIds || []);
-    return (inv?.items || []).filter(item =>
+    // Ohne verifizierte Favoritenliste KEIN Auto-Sell riskieren.
+    if (!Array.isArray(inv?.favoritedItemIds)) return [];
+    const favorites = new Set(inv.favoritedItemIds);
+    return (inv.items || []).filter(item =>
       item?.itemType === "Produce" &&
       typeof item.id === "string" && !favorites.has(item.id)
     );
   }
   function isMarkedProtected(plant, crop) {
-    // Best-effort: nur klar benannte Schutz-Flags prüfen.
-    // Entscheidend bleibt die Sperre des Garden Companion beim Senden.
-    return [crop?.protected, crop?.isProtected, crop?.preserved,
-      crop?.isPreserved, plant?.protected, plant?.isProtected,
-      plant?.preserved, plant?.isPreserved].some(v => v === true);
+    if ([crop?.locked, crop?.protected, crop?.isProtected,
+         crop?.preserved, crop?.isPreserved, plant?.locked,
+         plant?.protected, plant?.isProtected, plant?.preserved,
+         plant?.isPreserved].some(v => v === true)) return true;
+    // Standalone-Sicherheit: Mutationen/Max-Size standardmaessig schonen.
+    if (prefs.protectMutations && Array.isArray(crop?.mutations) &&
+        crop.mutations.length > 0) return true;
+    if (prefs.protectMaxSize && Number(crop?.size) >= 100) return true;
+    return false;
   }
   function findReadyCrop() {
-    const tiles = window.__qpmGardenSnapshot__?.tileObjects;
+    const tiles = bridge.garden;
     if (!tiles) return null;
     const chosen = selectedSlots();
     const now = Date.now();
@@ -344,7 +534,7 @@
       .test(errorText(error));
   }
 
-  // ===== WebSocket-Befehle – keine Umgehung der Companion-Wrappers =====
+  // ===== WebSocket-Befehle – eigene Sequenzierung über die Spielverbindung =====
   function sendCommand(command) {
     return new Promise((resolve, reject) => {
       const ws = getSocket();
@@ -393,7 +583,7 @@
       timeout = setTimeout(() => finish(new Error("Server-Timeout")), cfg.commandTimeoutMs);
       try {
         // Nur zwei zuvor im realen Spiel geprüfte Befehle werden verwendet.
-        // Das unveränderte ws.send erlaubt Garden Companion, Geschütztes zu sperren.
+        // Der Standalone-Schutz prüft jede Zielpflanze, bevor wir senden.
         ws.send(JSON.stringify({
           scopePath: ["Room", "Quinoa"],
           type: "QuinoaCommand", requestId, commandSequence: 0, command
@@ -436,18 +626,32 @@
     window.addEventListener(type, recordRealInput, { capture: true, passive: true });
   }
   function antiAfkPulse() {
-    if (!state.running || !prefs.antiAfk || !getSocket()) return;
+    if (!state.running || !prefs.antiAfk) {
+      state.antiAfkStatus = "Aus";
+      return false;
+    }
+    if (!getSocket()) {
+      state.antiAfkStatus = "Warte auf Verbindung";
+      return false;
+    }
     const now = Date.now();
-    if (now - state.lastRealInput < cfg.antiAfkOnlyAfterNoRealInputMs) return;
-    if (state.lastAntiAfk && now - state.lastAntiAfk < cfg.antiAfkEveryMs) return;
+    if (now - state.lastRealInput < cfg.antiAfkOnlyAfterNoRealInputMs) {
+      state.antiAfkStatus = "Echte Eingabe erkannt";
+      return false;
+    }
+    if (state.lastAntiAfk !== null &&
+        now - state.lastAntiAfk < cfg.antiAfkEveryMs) return false;
     const target = document.querySelector("canvas") || document.body;
-    if (!target) return;
-    const rect = target.getBoundingClientRect();
-    const x = Math.round(rect.left + rect.width / 2);
-    const y = Math.round(rect.top + rect.height / 2);
+    if (!target) {
+      state.antiAfkStatus = "Keine Spielflaeche gefunden";
+      return false;
+    }
     try {
-      // Nur Bewegung, keine Klicks, keine Tasten, keine echten Cursor-Bewegungen.
-      // Simulierte Events werden NICHT als "trusted" ausgegeben.
+      const rect = target.getBoundingClientRect();
+      const x = Math.round(rect.left + rect.width / 2);
+      const y = Math.round(rect.top + rect.height / 2);
+      // Nur synthetische Bewegung, keine Klicks oder spielverandernden Befehle.
+      // isTrusted=false: weder Browser noch Server muessen sie akzeptieren.
       if (typeof PointerEvent === "function") {
         target.dispatchEvent(new PointerEvent("pointermove", {
           bubbles: true, pointerType: "mouse", clientX: x, clientY: y
@@ -458,8 +662,12 @@
       }));
       state.antiAfkTicks++;
       state.lastAntiAfk = now;
+      state.antiAfkStatus = "Impuls gesendet (Wirkung unbestaetigt)";
+      return true;
     } catch (error) {
-      console.warn("[MG V13] Anti-AFK-Impuls fehlgeschlagen:", error);
+      state.antiAfkStatus = "Impuls konnte nicht gesendet werden";
+      console.warn("[MG Standalone] AFK-Impuls fehlgeschlagen:", error?.message);
+      return false;
     }
   }
 
@@ -478,7 +686,38 @@
     state.wakeLagMs = Math.max(0, Date.now() - before - (document.hidden ? Math.max(ms, 1000) : ms));
   }
 
-  // ===== Wiederverbindung: zunächst Spiel selbst reconnecten lassen =====
+  // ===== Wiederverbindung: zuerst immer den nativen Reconnect abwarten =====
+  // Erfolg des Impulses heisst NICHT, dass das Spiel den AFK-Kick verhindert.
+  // Watchdog unabhaengig vom Farm-Loop: bei Hidden-Tabs kann der Browser den
+  // Intervall trotzdem verlangsamen.
+  function watchdogTick() {
+    if (!state.running) return;
+    antiAfkPulse();
+    checkReloadReadiness();
+  }
+  setInterval(watchdogTick, cfg.afkWatchdogMs);
+
+  function readyForFarming() {
+    const ws = getSocket();
+    return !!(ws && bridge.garden && bridge.inventory &&
+      (bridge.sequence > 0 || readFrontier() >= 0));
+  }
+
+  function checkReloadReadiness() {
+    if (!state.running) return;
+    if (readyForFarming()) {
+      state.notReadySince = null;
+      state.reloadLimitReached = false;
+      return;
+    }
+    const now = Date.now();
+    if (state.notReadySince === null) state.notReadySince = now;
+    if (prefs.autoReload && state.connectedOnce &&
+        now - state.notReadySince >= cfg.offlineReloadAfterMs) {
+      controlledReload("Verbindung oder eigener Garten nach Reconnect nicht bereit");
+    }
+  }
+
   function reloadBudgetAvailable() {
     const now = Date.now();
     const recent = readJSON(sessionStorage, KEYS.reloads, [])
@@ -486,11 +725,17 @@
     storeJSON(sessionStorage, KEYS.reloads, recent);
     return recent.length < cfg.reloadLimit;
   }
-  function controlledReload() {
-    if (!prefs.autoReload || !state.running || !state.connectedOnce || state.reloadRequested) return false;
-    if (navigator.onLine === false) return false;
+  function controlledReload(reason = "Verbindung nicht bereit") {
+    if (!prefs.autoReload || !state.running || !state.connectedOnce ||
+        state.reloadRequested || readyForFarming()) return false;
+    // Bei echter Netzunterbrechung auf das Netzwerk warten statt Reload-Spam.
+    if (navigator.onLine === false) {
+      state.connection = "Netzwerk offline – warte";
+      return false;
+    }
     if (!reloadBudgetAvailable()) {
-      state.connection = "Offline – Reload-Limit erreicht";
+      state.reloadLimitReached = true;
+      state.connection = "Reload-Limit erreicht – warte";
       return false;
     }
     const history = readJSON(sessionStorage, KEYS.reloads, []);
@@ -498,27 +743,37 @@
     storeJSON(sessionStorage, KEYS.reloads, history);
     persistTimer();
     storeValue(sessionStorage, KEYS.resume, "1");
+    state.lastReloadReason = reason;
+    storeValue(sessionStorage, KEYS.lastReloadReason, reason);
     state.connection = "Neuladen für Reconnect …";
-    console.warn("[MG V13] Länger offline: Seite wird kontrolliert neu geladen.");
+    console.warn("[MG Standalone] Auto-Neuladen nach langem Verbindungsverlust.");
     state.reloadRequested = true;
-    location.reload();
-    return true;
+    try {
+      location.reload();
+      return true;
+    } catch (error) {
+      state.reloadRequested = false;
+      state.connection = "Auto-Neuladen fehlgeschlagen";
+      console.warn("[MG Standalone] Reload fehlgeschlagen:", error?.message);
+      return false;
+    }
   }
   let lastWs = null;
   async function ensureReady() {
     const ws = getSocket();
-    const snapshot = window.__qpmGardenSnapshot__?.tileObjects;
-    if (!ws || !snapshot) {
+    const snapshot = bridge.garden;
+    const commandReady = bridge.sequence > 0 || readFrontier() >= 0;
+    if (!ws || !snapshot || !commandReady || !bridge.inventory) {
       if (!ws) {
         if (state.offlineSince === null) state.offlineSince = Date.now();
         state.connection = "Verbindung verloren – warte …";
-        if (Date.now() - state.offlineSince >= cfg.offlineReloadAfterMs) {
-          controlledReload();
-          // Bis zum Reload keine Befehle senden.
-        }
       } else {
-        state.connection = "Warte auf Garten-Daten";
+        state.connection = !snapshot ? "Warte auf eigene Garten-Daten" :
+          !bridge.inventory ? "Warte auf Inventar" : "Warte auf Befehlssequenz";
       }
+      // Nach 90s kontinuierlich fehlender Bereitschaft darf der Watchdog laden.
+      checkReloadReadiness();
+      if (state.reloadLimitReached) state.connection = "Reload-Limit erreicht – warte";
       await waitTick(Math.min(10000, Math.max(1500,
         state.offlineSince ? Math.floor((Date.now() - state.offlineSince) / 10) : 1500)));
       return false;
@@ -526,6 +781,8 @@
     if (state.offlineSince !== null) state.reconnects++;
     state.reloadRequested = false;
     state.offlineSince = null;
+    state.notReadySince = null;
+    state.reloadLimitReached = false;
     state.connectedOnce = true;
     state.connection = "Verbunden";
     state.lastOnline = Date.now();
@@ -570,7 +827,7 @@
     if (protectedCrop) {
       state.protectedSkips++;
       state.consecutiveErrors = 0;
-      console.info("[MG V13] Geschützte Pflanze übersprungen; Companion-Schutz bleibt aktiv.");
+      console.info("[MG Standalone] Geschützte Pflanze übersprungen (eigener Pflanzenschutz).");
       await waitTick(250);
       return;
     }
@@ -617,10 +874,9 @@
     state.currentDelay = Math.min(prefs.maxHarvestDelayMs,
       Math.max(state.currentDelay, cfg.adaptive.initialMs + 50));
 
-    if (state.selfHealAttempts >= 2 && prefs.autoReload && state.connectedOnce) {
-      state.connection = "Self-Healing: kontrollierter Reconnect";
-      if (controlledReload()) return true;
-    }
+    // Kein Seiten-Reload bei gesundem Socket: langes Wachstum, geschuetzte
+    // Pflanzen oder normale Wartezeiten duerfen KEINEN Reload ausloesen.
+    // Nur der Verbindungs-Watchdog entscheidet ueber Auto-Neuladen.
     state.connection = "Self-Healing: kurze Sicherheitspause";
     state.breakerUntil = Math.max(state.breakerUntil, now + 3000);
     console.warn("[MG V13.2] Erntestau erkannt: pruefe Verbindung/Status, pausiere kurz.");
@@ -639,7 +895,6 @@
         try {
           if (!(await ensureReady())) continue;
           if (!state.running) break;
-          antiAfkPulse();
           if (Date.now() < state.breakerUntil) {
             state.connection = "Sicherheitspause";
             await waitTick(Math.min(2000, state.breakerUntil - Date.now()));
@@ -686,6 +941,8 @@
     state.consecutiveErrors = 0;
     state.breakerUntil = 0;
     state.reloadRequested = false;
+    state.lastRealInput = Date.now();
+    state.antiAfkStatus = prefs.antiAfk ? "Warte auf Inaktivitaet" : "Aus";
     storeValue(sessionStorage, KEYS.resume, "1");
     startTimer();
     updatePanel();
@@ -696,8 +953,9 @@
     state.running = false;
     storeValue(sessionStorage, KEYS.resume, "0");
     stopTimer();
+    state.antiAfkStatus = "Gestoppt";
     updatePanel();
-    console.log("[MG V13] Stop angefordert.");
+    console.log("[MG Standalone] Stop angefordert.");
   }
   function onHotkey(event) {
     if (event.code !== "F8" || event.repeat || event.ctrlKey || event.altKey || event.metaKey) return;
@@ -709,11 +967,19 @@
   }
   window.addEventListener("keydown", onHotkey, true);
 
-  // ===== Update-Erkennung: Lesender Abruf; Installation macht Tampermonkey =====
+  // ===== V14 Hauptkanal: Versionswechsel von V13 ueber denselben GitHub-Pfad =====
+  // Name, Namespace und URL muessen mit dem Original V13.2.3 uebereinstimmen,
+  // damit Tampermonkey die vorhandene Installation aktualisiert statt dupliziert.
+  // Die separate Standalone-Beta hat einen eigenen, unabhaengigen Update-Kanal.
   const updateInfo = { checkedAt: 0, status: "Noch nicht geprueft", newer: null };
   let updateRunning = false;
-  function parseVersion(source) {
-    return String(source).match(/^\s*\/\/\s*@version\s+(\d+\.\d+\.\d+)\b/m)?.[1] || null;
+  function parseMainRelease(source) {
+    const header = String(source).match(/^\/\/ ==UserScript==\s*\r?\n([\s\S]*?)^\/\/ ==\/UserScript==/m)?.[1];
+    if (!header) return null;
+    if (!/^\/\/\s*@namespace\s+mg-autofarm-local\s*$/m.test(header)) return null;
+    if (!/^\/\/\s*@name\s+Magic Garden AutoFarm\s*$/m.test(header)) return null;
+    // Versionsnummer ausschließlich aus dem validierten Userscript-Header.
+    return header.match(/^\/\/\s*@version\s+(\d+\.\d+\.\d+)\s*$/m)?.[1] || null;
   }
   function compareVersions(a, b) {
     const x = a.split(".").map(Number), y = b.split(".").map(Number);
@@ -728,18 +994,25 @@
     }
     updateRunning = true;
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 6000);
+    const timeout = setTimeout(() => controller.abort(), 8000);
     try {
-      const response = await fetch(UPDATE_URL, { cache: "no-store", signal: controller.signal });
+      // credentials:"omit" vermeidet CORS-Fehler durch Credential-/Wildcard-Mix.
+      // Query-Parameter umgehen alte Edge-/Proxy-Caches; Link selbst bleibt konstant.
+      const response = await fetch(UPDATE_URL + "?check=" + Date.now(), {
+        cache: "no-store", credentials: "omit", mode: "cors", signal: controller.signal
+      });
       if (!response.ok) throw new Error("HTTP " + response.status);
-      const remote = parseVersion(await response.text());
-      if (!remote) throw new Error("Versionsnummer fehlt");
-      updateInfo.newer = compareVersions(remote, VERSION) > 0 ? remote : null;
-      updateInfo.status = updateInfo.newer
+      const remote = parseMainRelease(await response.text());
+      if (!remote) throw new Error("Keine gueltige AutoFarm-Version");
+      const comparison = compareVersions(remote, VERSION);
+      updateInfo.newer = comparison > 0 ? remote : null;
+      updateInfo.status = comparison > 0
         ? "Update verfuegbar: V" + remote
-        : "Aktuell (main: V" + remote + ")";
+        : comparison < 0
+          ? "Server-Version aelter (deine V" + VERSION + ")"
+          : "Aktuell: V" + VERSION;
     } catch (error) {
-      updateInfo.status = "Update-Check nicht moeglich";
+      updateInfo.status = "Update-Check fehlgeschlagen (Verbindung/Release)";
       updateInfo.newer = null;
     } finally {
       clearTimeout(timeout);
@@ -747,12 +1020,12 @@
       updateRunning = false;
       updatePanel();
     }
-    return { ...updateInfo };
+    return { ...updateInfo, url: UPDATE_URL };
   }
 
   // ===== Diagnose OHNE IDs, Chat, Koordinaten, Inventarinhalte oder Token =====
   function getDiagnostics() {
-    const tiles = window.__qpmGardenSnapshot__?.tileObjects;
+    const tiles = bridge.garden;
     const errorKind = !state.lastError ? "none" :
       looksProtected(state.lastError) ? "protected" :
       isNetworkError(state.lastError) ? "connection" : "other";
@@ -765,6 +1038,17 @@
       socketOpen: !!getSocket(),
       snapshotAvailable: !!tiles,
       snapshotTileCount: tiles ? Object.keys(tiles).length : 0,
+      nativeSocketObserved: bridge.observedSockets > 0,
+      gameStateSubscribed: !!bridge.connection,
+      nativeSequenceReady: bridge.sequence > 0,
+      antiAfkEnabled: prefs.antiAfk,
+      antiAfkPulseCount: state.antiAfkTicks,
+      antiAfkStatus: state.antiAfkStatus,
+      autoReloadEnabled: prefs.autoReload,
+      autoReloadLimitReached: state.reloadLimitReached,
+      autoReloadAttemptsLast15m: readJSON(sessionStorage, KEYS.reloads, []).filter(t =>
+        Number.isFinite(t) && t > Date.now() - cfg.reloadWindowMs).length,
+      lastAutoReloadReason: state.lastReloadReason,
       tabHidden: !!document.hidden,
       selectedFieldCount: selectedSlots().size,
       readyProduceCount: getProduce().length,
@@ -896,7 +1180,7 @@
     const status = panel.querySelector("#mg13-status");
     const stats = panel.querySelector("#mg13-stats");
     if (status) status.textContent = state.running ? "🟢 Aktiv" : state.busy ? "🟡 Stoppt …" : "🔴 Gestoppt";
-    if (headline) headline.textContent = state.running ? "🌱 V13.2.3 · Aktiv" : "🌱 Magic Garden V13.2.3";
+    if (headline) headline.textContent = state.running ? "🌱 Standalone BETA · Aktiv" : "🌱 Magic Garden Standalone BETA";
     if (stats) stats.textContent =
       `Felder: ${selectedSlots().size} / 200\n` +
       `Geerntet: ${state.harvested}\n` +
@@ -909,9 +1193,12 @@
       `⚡ Erntepause: ${prefs.adaptive ? state.currentDelay : cfg.adaptive.initialMs} ms\n` +
       `📡 Antwort: ${state.lastResponseMs} ms (Ø ${Math.round(state.averageResponseMs)} ms)\n` +
       `🔌 ${state.connection}\n` +
+      `🧩 Standalone: Socket ${getSocket() ? "bereit" : "fehlt"}, Daten ${bridge.garden ? "bereit" : "fehlen"}, Sequenz ${bridge.sequence > 0 ? "bereit" : "warte"}\n` +
       `🔁 Reconnects: ${state.reconnects}\n` +
       `🖥 Tab: ${document.hidden ? "Hintergrund (gedrosselt möglich)" : "Sichtbar"}\n` +
       `🛡 Anti-AFK-Impulse: ${state.antiAfkTicks} (nicht garantiert)\n` +
+      `💤 AFK: ${state.antiAfkStatus}\n` +
+      `🔁 Auto-Neuladen: ${prefs.autoReload ? "An" : "Aus"}${state.reloadLimitReached ? " (Limit erreicht)" : ""}\n` +
       `🩺 Self-Healing: ${prefs.selfHealing ? "An" : "Aus"} (${state.selfHealChecks} Prüfungen)\n` +
       `⌨ F8 = Start / Stop`;
     if (fieldCount) fieldCount.textContent = `Ausgewählt: ${selectedSlots().size} / 200`;
@@ -1063,7 +1350,7 @@
     const header = document.createElement("div");
     header.style.cssText = "display:flex;justify-content:space-between;align-items:center;gap:8px";
     headline = document.createElement("strong");
-    headline.textContent = "🌱 Magic Garden V13.2.3";
+    headline.textContent = "🌱 Magic Garden Standalone BETA";
     headline.style.fontSize = "16px";
     const toggle = btn(collapsed ? "+" : "−", () => {
       collapsed = !collapsed;
@@ -1112,8 +1399,17 @@
       checkbox("Anti-AFK-Impulse (experimentell)", prefs.antiAfk, v => { prefs.antiAfk = v; }),
       checkbox("Auto-Neuladen bei längerem Offline", prefs.autoReload, v => { prefs.autoReload = v; })
     );
+    const standaloneToggles = document.createElement("div");
+    standaloneToggles.style.cssText = "border-top:1px solid #355342;padding:9px 0";
+    standaloneToggles.append(
+      checkbox("Mutierte Ernten schützen (Standalone)", prefs.protectMutations,
+        v => { prefs.protectMutations = v; }),
+      checkbox("Pflanzen mit Größe 100 schützen", prefs.protectMaxSize,
+        v => { prefs.protectMaxSize = v; })
+    );
+    toggles.appendChild(standaloneToggles);
     const note = document.createElement("small");
-    note.textContent = "Anti-AFK nutzt künstliche Mausbewegungen ohne Klicks; kein garantierter Schutz vor AFK-Kicks. Hintergrund-Tabs können vom Browser gebremst werden.";
+    note.textContent = "V14: Anti-AFK-Impulse sind kuenstliche Mausbewegungen (kein garantierter Kick-Schutz). Auto-Neuladen erst nach 90s fehlender Spielbereitschaft, maximal 3-mal in 15 Minuten.";
     note.style.cssText = "color:#a8b9ae;display:block;line-height:1.4;margin-top:5px";
     toggles.appendChild(note);
     body.appendChild(toggles);
@@ -1259,5 +1555,5 @@
   if (readValue(sessionStorage, KEYS.resume) === "1") {
     start({ auto: true });
   }
-  console.log("✅ Magic Garden AutoFarm V13.2.3 geladen (Garden Companion erforderlich).");
+  console.log("✅ Magic Garden AutoFarm V14.0.3 geladen (keine QPM-/Companion-Abhaengigkeit).");
 })();
