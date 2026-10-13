@@ -445,11 +445,11 @@ test('manual update check reports remote older without downgrade', async () => {
   assert.match(result.status, /Server-Version aelter/);
 });
 
-test('metadata and update check both use one standalone release filename', () => {
+test('metadata and updater share the original V13 release filename', () => {
   const target = 'MagicGardenAutoFarm.user.js';
   const base = 'https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/';
-  assert.ok(source.includes('// @updateURL    ' + base + target));
-  assert.ok(source.includes('// @downloadURL  ' + base + target));
+  assert.ok(source.includes('// @updateURL   ' + base + target));
+  assert.ok(source.includes('// @downloadURL ' + base + target));
   assert.ok(source.includes('const UPDATE_URL = "' + base + target + '"'));
   assert.ok(!source.includes('const UPDATE_URL = "' + base + 'MagicGardenAutoFarm.standalone.user.js"'));
 });
