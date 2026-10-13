@@ -509,7 +509,7 @@
       .test(errorText(error));
   }
 
-  // ===== WebSocket-Befehle – keine Umgehung der Companion-Wrappers =====
+  // ===== WebSocket-Befehle – eigene Sequenzierung über die Spielverbindung =====
   function sendCommand(command) {
     return new Promise((resolve, reject) => {
       const ws = getSocket();
@@ -558,7 +558,7 @@
       timeout = setTimeout(() => finish(new Error("Server-Timeout")), cfg.commandTimeoutMs);
       try {
         // Nur zwei zuvor im realen Spiel geprüfte Befehle werden verwendet.
-        // Das unveränderte ws.send erlaubt Garden Companion, Geschütztes zu sperren.
+        // Der Standalone-Schutz prüft jede Zielpflanze, bevor wir senden.
         ws.send(JSON.stringify({
           scopePath: ["Room", "Quinoa"],
           type: "QuinoaCommand", requestId, commandSequence: 0, command
@@ -737,7 +737,7 @@
     if (protectedCrop) {
       state.protectedSkips++;
       state.consecutiveErrors = 0;
-      console.info("[MG V13] Geschützte Pflanze übersprungen; Companion-Schutz bleibt aktiv.");
+      console.info("[MG Standalone] Geschützte Pflanze übersprungen (eigener Pflanzenschutz).");
       await waitTick(250);
       return;
     }
