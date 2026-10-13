@@ -2,7 +2,7 @@
 
 **Automatisches Ernten und Verkaufen für [Magic Garden](https://magicgarden.gg/) – direkt im Browser über Tampermonkey.**
 
-> **Aktuelle Version:** V13.2.2 · Inoffizielles Community-Projekt, nicht mit Magic Garden verbunden.
+> **Aktuelle Version:** V13.2.3 · Inoffizielles Community-Projekt, nicht mit Magic Garden verbunden.
 
 ## 🚀 Installation
 
@@ -29,7 +29,7 @@
 | 💤 Anti-AFK (experimentell) | Sendet synthetische Mausbewegungsereignisse nach Inaktivität. **Kein garantierter Schutz vor AFK-Kicks.** |
 | 🔌 Auto-Reconnect | Wartet bei Verbindungsverlust und kann nach längerer Unterbrechung kontrolliert neu laden. |
 | 🔁 Auto-Resume | Setzt einen zuvor aktiven Lauf nach Neuladen im selben Tab fort. |
-| 🛡️ Fehlerbehandlung | Wartet bei vorübergehenden Problemen und respektiert den Pflanzenschutz von Garden Companion. |
+| 🛡️ Fehlerbehandlung | Wartet bei vorübergehenden Problemen und respektiert den Pflanzenschutz von Garden Companion. Abgelehnte Ernten (`rejected`) werden getrennt gezählt und ohne adaptive Bestrafung übersprungen. |
 | ⌨️ F8-Hotkey | Startet oder stoppt die AutoFarm ohne Öffnen des Menüs. |
 | 📦 Hintergrundbetrieb | Erkennt inaktive Tabs; Browser-Drosselung kann den Betrieb trotzdem verlangsamen. |
 | 📋 Einklappbares, verschiebbares Menü | Start/Stop, Status, Laufzeit, Feldauswahl; Position bleibt nach F5 gespeichert. |
@@ -68,6 +68,12 @@ Für neue Releases dieselbe Datei **`MagicGardenAutoFarm.user.js`** ersetzen und
 - Geschützte Pflanzen sollen **nicht** gegen den Pflanzenschutz geerntet werden.
 - Automatisierung kann gegen die Regeln des jeweiligen Spiels verstoßen. Verwendung auf eigenes Risiko.
 - Keine Zugangsdaten, Cookies oder privaten WebSocket-Mitschnitte veröffentlichen.
+
+## 🩺 Abgelehnte Ernten (V13.2.3)
+
+Wenn Garden Companion oder das Spiel `HarvestCrop` mit `code: "rejected"` ablehnt, ist das **nicht automatisch ein Geschwindigkeitsproblem**. Die AutoFarm ignoriert diese Ablehnung daher bei der adaptiven Erntepause, meldet sie unter **Ablehnungen** und versucht denselben Slot erst nach 10 Minuten erneut. Bei drei Ablehnungen ohne eine erfolgreiche Ernte folgt eine 30-Sekunden-Sicherheitspause.
+
+Pflanzenschutz bleibt aktiv. Der Bot erzwingt keine Ernten. Wenn die Ablehnungen weiterhin stark zunehmen, AutoFarm stoppen und testweise andere Userscripts auf Konflikte prüfen; insbesondere bei mehrfachen, überschriebenen Garten-Snapshots.
 
 ## 🛠️ Fehlersuche
 

@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         Magic Garden AutoFarm
 // @namespace    mg-autofarm-local
-// @version      13.2.2
+// @version      13.2.3
 // @updateURL   https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js
 // @downloadURL https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js
-// @description  V13.2.2: Feldauswahl per Ziehen, Session-Reset, Self-Healing und Einstellungen
+// @description  V13.2.3: Rejected-Harvest-Fix, Drag-Feldauswahl, Auto-Sell, Self-Healing
 // @match        https://magicgarden.gg/*
 // @run-at       document-start
 // @grant        none
@@ -40,6 +40,9 @@
     commandTimeoutMs: 6000,
     harvestedSlotCooldownMs: 5000,
     failedSlotCooldownMs: 60000,
+    rejectedSlotCooldownMs: 10 * 60000,
+    rejectionBurstThreshold: 3,
+    rejectionBurstPauseMs: 30000,
     protectedSlotCooldownMs: 30 * 60000,
     antiAfkEveryMs: 50 * 1000,
     antiAfkOnlyAfterNoRealInputMs: 45 * 1000,
@@ -82,7 +85,7 @@
   }
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-  const VERSION = "13.2.2";
+  const VERSION = "13.2.3";
   const UPDATE_URL = "https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js";
   const NUMBER_FIELDS = Object.freeze({
     sellThreshold: { min: 5, max: 200, step: 1 },
@@ -132,6 +135,9 @@
     coins: 0,
     errors: 0,
     protectedSkips: 0,
+    rejectedHarvests: 0,
+    rejectionStreak: 0,
+    lastRejection: "",
     lastError: "",
     cooldowns: new Map(),
     currentDelay: cfg.adaptive.initialMs,
@@ -195,11 +201,13 @@
     state.sessionEpoch++;
     resetTimer();
     for (const key of [
-      "harvested", "sold", "coins", "errors", "protectedSkips",
+      "harvested", "sold", "coins", "errors", "protectedSkips", "rejectedHarvests",
       "reconnects", "antiAfkTicks", "selfHealChecks", "speedAdjustments",
       "lastResponseMs", "averageResponseMs"
     ]) state[key] = 0;
     state.lastError = "";
+    state.lastRejection = "";
+    state.rejectionStreak = 0;
     state.successStreak = 0;
     state.lastHarvestAt = null;
     state.ripeSince = null;
@@ -318,6 +326,12 @@
     if (state.currentDelay !== before) state.speedAdjustments++;
   }
 
+  // "rejected" bedeutet nur: HarvestCrop wurde abgelehnt.
+  // Es ist KEIN Beweis fuer Server-Lag oder geschuetzte Pflanzen.
+  function isHarvestRejected(error) {
+    return error?.commandType === "HarvestCrop" &&
+      error?.code === "rejected";
+  }
   function errorText(error) {
     return String(error?.message || error || "Unbekannter Fehler").slice(0, 350);
   }
@@ -345,8 +359,10 @@
         finished = true;
         clearTimeout(timeout);
         ws.removeEventListener("message", onMessage);
-        if (command.type === "HarvestCrop") {
-          adjustSpeed(performance.now() - sentAt, !err, !!err && looksProtected(err));
+        if (command.type === "HarvestCrop" &&
+            (!err || (!isHarvestRejected(err) && !looksProtected(err)))) {
+          // Harte Ablehnungen sind kein Signal fuer eine zu kurze Erntepause.
+          adjustSpeed(performance.now() - sentAt, !err, false);
         }
         if (err) reject(err);
         else {
@@ -360,7 +376,16 @@
         try { msg = JSON.parse(event.data); } catch { return; }
         if (msg.type !== "QuinoaCommandResult" || msg.requestId !== requestId) return;
         if (msg.ok !== true) {
-          return finish(new Error(JSON.stringify(msg.error || msg.reason || msg).slice(0, 350)));
+          const code = typeof msg.code === "string" ? msg.code :
+            typeof msg.error?.code === "string" ? msg.error.code : "";
+          const kind = typeof msg.commandType === "string" ? msg.commandType : command.type;
+          const reason = code || (typeof msg.reason === "string" ? msg.reason :
+            typeof msg.error === "string" ? msg.error : "unbekannt");
+          // Keine requestId oder Rohdaten in Logs/Diagnosen kopieren.
+          const error = new Error(`${kind}: ${String(reason).slice(0, 100)}`);
+          error.code = code;
+          error.commandType = kind;
+          return finish(error);
         }
         finish(null, msg);
       }
@@ -388,6 +413,7 @@
     // Bestaetigte Ernte weiterhin im Cooldown respektieren – selbst bei Reset.
     state.cooldowns.set(target.key, Date.now() + cfg.harvestedSlotCooldownMs);
     state.lastHarvestAt = Date.now();
+    state.rejectionStreak = 0;
     state.ripeSince = null;
     state.lastSelfHealAt = null;
     state.selfHealAttempts = 0;
@@ -510,7 +536,31 @@
   // ===== Fehler-Recovery: Schutz respektieren, backoff, Circuit Breaker =====
   async function handleError(error, target) {
     const msg = errorText(error);
-    const protectedCrop = !!target && looksProtected(error);
+    const rejectedCrop = !!target && isHarvestRejected(error);
+    const protectedCrop = !!target && !rejectedCrop && looksProtected(error);
+
+    if (rejectedCrop) {
+      // Ablehnung ist nicht automatisch ein Verbindungs- oder Geschwindigkeitsfehler.
+      // Den Ernte-Slot in Ruhe lassen und NICHT den Pflanzenschutz umgehen.
+      state.rejectedHarvests++;
+      state.rejectionStreak++;
+      state.lastRejection = msg;
+      state.cooldowns.set(target.key, Date.now() + cfg.rejectedSlotCooldownMs);
+      state.consecutiveErrors = 0;
+      if (state.rejectionStreak >= cfg.rejectionBurstThreshold) {
+        state.breakerUntil = Math.max(state.breakerUntil,
+          Date.now() + cfg.rejectionBurstPauseMs);
+        state.connection = "Ernten abgelehnt – Sicherheitspause";
+        state.rejectionStreak = 0;
+        console.warn("[MG V13.2.3] Mehrere Ernten abgelehnt – 30s Sicherheitspause. Pflanzenschutz bleibt aktiv.");
+      } else if (state.rejectedHarvests <= 3 || state.rejectedHarvests % 10 === 0) {
+        console.info("[MG V13.2.3] Ernte abgelehnt – Slot wird 10 Minuten ausgelassen (Zaehler: " +
+          state.rejectedHarvests + ").");
+      }
+      await waitTick(350);
+      return;
+    }
+
     state.errors++;
     state.lastError = msg;
     if (target) {
@@ -721,6 +771,7 @@
       harvestedCount: state.harvested,
       salesCount: state.sold,
       errorCount: state.errors,
+      rejectedHarvestCount: state.rejectedHarvests,
       errorCategory: errorKind,
       protectedSkipCount: state.protectedSkips,
       reconnectCount: state.reconnects,
@@ -845,14 +896,15 @@
     const status = panel.querySelector("#mg13-status");
     const stats = panel.querySelector("#mg13-stats");
     if (status) status.textContent = state.running ? "🟢 Aktiv" : state.busy ? "🟡 Stoppt …" : "🔴 Gestoppt";
-    if (headline) headline.textContent = state.running ? "🌱 V13.2.2 · Aktiv" : "🌱 Magic Garden V13.2.2";
+    if (headline) headline.textContent = state.running ? "🌱 V13.2.3 · Aktiv" : "🌱 Magic Garden V13.2.3";
     if (stats) stats.textContent =
       `Felder: ${selectedSlots().size} / 200\n` +
       `Geerntet: ${state.harvested}\n` +
       `Verkäufe: ${state.sold}\n` +
       `Coins: ${state.coins.toLocaleString("de-DE")}\n` +
       `Verkaufbare Items: ${getProduce().length}\n` +
-      `Fehler: ${state.errors}  ·  Schutz-Skips: ${state.protectedSkips}\n` +
+      `Fehler: ${state.errors}  ·  Ablehnungen: ${state.rejectedHarvests}\n` +
+      `Schutz-Skips: ${state.protectedSkips}\n` +
       `⏱ Laufzeit: ${formatTime(runtimeMs())}\n` +
       `⚡ Erntepause: ${prefs.adaptive ? state.currentDelay : cfg.adaptive.initialMs} ms\n` +
       `📡 Antwort: ${state.lastResponseMs} ms (Ø ${Math.round(state.averageResponseMs)} ms)\n` +
@@ -1011,7 +1063,7 @@
     const header = document.createElement("div");
     header.style.cssText = "display:flex;justify-content:space-between;align-items:center;gap:8px";
     headline = document.createElement("strong");
-    headline.textContent = "🌱 Magic Garden V13.2.2";
+    headline.textContent = "🌱 Magic Garden V13.2.3";
     headline.style.fontSize = "16px";
     const toggle = btn(collapsed ? "+" : "−", () => {
       collapsed = !collapsed;
@@ -1191,6 +1243,7 @@
         Reconnects: state.reconnects,
         SchutzUebersprungen: state.protectedSkips,
         Fehler: state.errors,
+        ErntenAbgelehnt: state.rejectedHarvests,
         SelfHealingPruefungen: state.selfHealChecks,
         LetzterFehler: state.lastError
       };
@@ -1206,5 +1259,5 @@
   if (readValue(sessionStorage, KEYS.resume) === "1") {
     start({ auto: true });
   }
-  console.log("✅ Magic Garden AutoFarm V13.2.2 geladen (Garden Companion erforderlich).");
+  console.log("✅ Magic Garden AutoFarm V13.2.3 geladen (Garden Companion erforderlich).");
 })();

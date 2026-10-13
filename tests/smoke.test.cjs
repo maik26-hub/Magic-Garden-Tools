@@ -32,7 +32,7 @@ function setup(prefs = {}) {
   return { api: window.MGAutoFarmV13, localStorage, context };
 }
 
-test('V13.2.2 initializes and retains selection and prior controls', () => {
+test('V13.2.3 initializes and retains selection and prior controls', () => {
   const { api } = setup();
   assert.ok(api);
   assert.equal(api.selectedSlots().size, 3);
@@ -58,7 +58,7 @@ test('settings are validated and persisted', () => {
 test('diagnostics exclude raw user/game identifiers', () => {
   const { api } = setup();
   const report = api.getDiagnostics();
-  assert.equal(report.version, '13.2.2');
+  assert.equal(report.version, '13.2.3');
   assert.equal(report.selectedFieldCount, 3);
   assert.ok(!Object.keys(report).some(k =>
     /cookie|user|account|itemId|cropId|requestId|inventoryItems/i.test(k)
@@ -234,4 +234,99 @@ test('field buttons keep keyboard click support and have touch-safe pointer styl
   assert.match(source, /if \(event\.detail !== 0\) return;/);
   assert.match(source, /touch-action:none/);
   assert.match(source, /installFieldPainting\(fields\)/);
+});
+
+test('rejected harvests do not increase adaptive delay, preserve protection, and cool down the rejected slot', async () => {
+  const { api, context } = setup();
+  const listeners = new Set();
+  let lastCommand = null;
+  const ws = {
+    readyState: 1,
+    addEventListener(type, fn) { if (type === 'message') listeners.add(fn); },
+    removeEventListener(type, fn) { if (type === 'message') listeners.delete(fn); },
+    send(text) { lastCommand = JSON.parse(text); }
+  };
+  context.window.quinoaWS = ws;
+  context.window.__qpmGardenSnapshot__ = {
+    tileObjects: { 0: { objectType: 'plant', slots: [{ slotId: 0, endTime: 0 }] } }
+  };
+  api.start();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(lastCommand?.command?.type, 'HarvestCrop');
+
+  const beforeDelay = api.state.currentDelay;
+  const reply = {
+    type: 'QuinoaCommandResult',
+    requestId: lastCommand.requestId,
+    commandType: 'HarvestCrop',
+    ok: false,
+    code: 'rejected'
+  };
+  for (const fn of [...listeners]) fn({ data: JSON.stringify(reply) });
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+
+  assert.equal(api.state.rejectedHarvests, 1);
+  assert.equal(api.state.errors, 0);
+  assert.equal(api.state.currentDelay, beforeDelay);
+  assert.equal(api.state.rejectionStreak, 1);
+  assert.ok(api.state.cooldowns.get('0:0') > Date.now() + 8 * 60_000);
+  assert.equal(api.state.protectedSkips, 0);
+  assert.equal(api.state.lastError, '');
+  assert.ok(!api.state.lastRejection.includes(reply.requestId));
+  api.stop();
+});
+
+test('rejected harvest diagnostics are privacy safe and session reset clears count', () => {
+  const { api } = setup();
+  api.state.rejectedHarvests = 4;
+  assert.equal(api.getDiagnostics().rejectedHarvestCount, 4);
+  api.resetSession();
+  assert.equal(api.state.rejectedHarvests, 0);
+  assert.equal(api.state.lastRejection, '');
+  assert.equal(api.getDiagnostics().rejectedHarvestCount, 0);
+});
+
+test('harvest protections, selling, adaptive speed, and drag selection remain installed', () => {
+  assert.match(source, /isMarkedProtected\(plant, crop\)/);
+  assert.match(source, /function isHarvestRejected\(error\)/);
+  assert.match(source, /type: "SellAllCrops"/);
+  assert.match(source, /installFieldPainting\(fields\)/);
+  assert.ok(source.includes('(!err || (!isHarvestRejected(err)'));
+});
+
+test('three rejected harvests activate a safety pause, never a network error breaker', async () => {
+  const start = source.indexOf('  async function handleError(error, target) {');
+  const end = source.indexOf('\n  // ===== Self-Healing', start);
+  assert.ok(start >= 0 && end > start);
+  const func = source.slice(start, end);
+  const now = Date.now();
+  const state = {
+    errors: 0, rejectedHarvests: 0, rejectionStreak: 0,
+    consecutiveErrors: 0, cooldowns: new Map(),
+    breakerUntil: 0, connection: 'Verbunden', lastRejection: ''
+  };
+  const cfg = {
+    rejectedSlotCooldownMs: 600000,
+    rejectionBurstThreshold: 3,
+    rejectionBurstPauseMs: 30000,
+    protectedSlotCooldownMs: 600000
+  };
+  const handle = new Function('state', 'cfg', 'errorText', 'isHarvestRejected',
+    'looksProtected', 'waitTick', 'Date', 'console', func + '\nreturn handleError;')(
+    state, cfg, e => String(e.message), e => e.code === 'rejected' && e.commandType === 'HarvestCrop',
+    () => false, async () => {}, Date, { log() {}, info() {}, warn() {}, error() {} }
+  );
+  for (let i = 0; i < 3; i++) {
+    const error = new Error('HarvestCrop: rejected');
+    error.code = 'rejected';
+    error.commandType = 'HarvestCrop';
+    await handle(error, { key: i + ':0' });
+  }
+  assert.equal(state.errors, 0);
+  assert.equal(state.rejectedHarvests, 3);
+  assert.equal(state.rejectionStreak, 0);
+  assert.ok(state.breakerUntil >= now + 25000);
+  assert.equal(state.cooldowns.size, 3);
 });
