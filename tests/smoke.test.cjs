@@ -295,3 +295,38 @@ test('harvest protections, selling, adaptive speed, and drag selection remain in
   assert.match(source, /installFieldPainting\(fields\)/);
   assert.ok(source.includes('(!err || (!isHarvestRejected(err)'));
 });
+
+test('three rejected harvests activate a safety pause, never a network error breaker', async () => {
+  const start = source.indexOf('  async function handleError(error, target) {');
+  const end = source.indexOf('\n  // ===== Self-Healing', start);
+  assert.ok(start >= 0 && end > start);
+  const func = source.slice(start, end);
+  const now = Date.now();
+  const state = {
+    errors: 0, rejectedHarvests: 0, rejectionStreak: 0,
+    consecutiveErrors: 0, cooldowns: new Map(),
+    breakerUntil: 0, connection: 'Verbunden', lastRejection: ''
+  };
+  const cfg = {
+    rejectedSlotCooldownMs: 600000,
+    rejectionBurstThreshold: 3,
+    rejectionBurstPauseMs: 30000,
+    protectedSlotCooldownMs: 600000
+  };
+  const handle = new Function('state', 'cfg', 'errorText', 'isHarvestRejected',
+    'looksProtected', 'waitTick', 'Date', 'console', func + '\nreturn handleError;')(
+    state, cfg, e => String(e.message), e => e.code === 'rejected' && e.commandType === 'HarvestCrop',
+    () => false, async () => {}, Date, { log() {}, info() {}, warn() {}, error() {} }
+  );
+  for (let i = 0; i < 3; i++) {
+    const error = new Error('HarvestCrop: rejected');
+    error.code = 'rejected';
+    error.commandType = 'HarvestCrop';
+    await handle(error, { key: i + ':0' });
+  }
+  assert.equal(state.errors, 0);
+  assert.equal(state.rejectedHarvests, 3);
+  assert.equal(state.rejectionStreak, 0);
+  assert.ok(state.breakerUntil >= now + 25000);
+  assert.equal(state.cooldowns.size, 3);
+});
