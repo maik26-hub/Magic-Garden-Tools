@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Magic Garden AutoFarm Standalone (Beta)
 // @namespace    mg-autofarm-standalone-beta
-// @version      14.0.0
-// @description  BETA V14: standalone game state, WebSocket sequencer and safe harvest without companion mods
+// @version      14.0.1
+// @description  BETA V14.0.1: standalone farm, experimental AFK pulses, safe reconnect/reload recovery
 // @match        https://magicgarden.gg/*
 // @run-at       document-start
 // @grant        none
@@ -27,6 +27,7 @@
     resume: "magic_garden_standalone_beta_should_resume",           // sessionStorage: pro Tab
     timer: "magic_garden_standalone_beta_elapsed_ms",               // sessionStorage
     reloads: "magic_garden_standalone_beta_reload_history",         // sessionStorage
+    lastReloadReason: "magic_garden_standalone_beta_last_reload_reason",
     panelPosition: "magic_garden_v13_panel_position"   // localStorage
   };
 
@@ -44,6 +45,8 @@
     protectedSlotCooldownMs: 30 * 60000,
     antiAfkEveryMs: 50 * 1000,
     antiAfkOnlyAfterNoRealInputMs: 45 * 1000,
+    // AFK-Impulse im eigenen Takt, statt vom Ernte-Loop abzuhaengen.
+    afkWatchdogMs: 10 * 1000,
     offlineReloadAfterMs: 90 * 1000,
     reloadLimit: 3,
     reloadWindowMs: 15 * 60000,
@@ -83,7 +86,7 @@
   }
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-  const VERSION = "14.0.0";
+  const VERSION = "14.0.1";
   const UPDATE_URL = "https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js";
   const NUMBER_FIELDS = Object.freeze({
     sellThreshold: { min: 5, max: 200, step: 1 },
@@ -150,12 +153,16 @@
     connection: "Warte auf Spiel",
     connectedOnce: false,
     offlineSince: null,
+    notReadySince: null,
+    reloadLimitReached: false,
+    lastReloadReason: readValue(sessionStorage, KEYS.lastReloadReason, "") || "",
     reconnects: 0,
     lastOnline: null,
     hidden: typeof document !== "undefined" ? document.hidden : false,
     lastRealInput: Date.now(),
     antiAfkTicks: 0,
     lastAntiAfk: null,
+    antiAfkStatus: "Nicht aktiviert",
     lastActivityAt: null,
     lastLoopAt: null,
     wakeLagMs: 0,
@@ -307,6 +314,21 @@
     bridge.lastFullState = null;
     bridge.lastSnapshotAt = 0;
     bridge.observedSockets++;
+    ws.addEventListener("close", () => {
+      // Ein altes Socket darf die neue Verbindung NICHT als offline markieren.
+      if (bridge.socket !== ws) return;
+      bridge.garden = null;
+      bridge.inventory = null;
+      bridge.lastFullState = null;
+      bridge.sequence = -1;
+      bridge.frontier = -1;
+      bridge.lastSnapshotAt = 0;
+      if (state.running) {
+        if (state.offlineSince === null) state.offlineSince = Date.now();
+        if (state.notReadySince === null) state.notReadySince = Date.now();
+        state.connection = "WebSocket getrennt – warte auf Reconnect";
+      }
+    });
     // Der Serverzaehler gehoert zu jeder Verbindung separat.
     ws.addEventListener("message", event => {
       const data = event.data;
@@ -601,18 +623,32 @@
     window.addEventListener(type, recordRealInput, { capture: true, passive: true });
   }
   function antiAfkPulse() {
-    if (!state.running || !prefs.antiAfk || !getSocket()) return;
+    if (!state.running || !prefs.antiAfk) {
+      state.antiAfkStatus = "Aus";
+      return false;
+    }
+    if (!getSocket()) {
+      state.antiAfkStatus = "Warte auf Verbindung";
+      return false;
+    }
     const now = Date.now();
-    if (now - state.lastRealInput < cfg.antiAfkOnlyAfterNoRealInputMs) return;
-    if (state.lastAntiAfk && now - state.lastAntiAfk < cfg.antiAfkEveryMs) return;
+    if (now - state.lastRealInput < cfg.antiAfkOnlyAfterNoRealInputMs) {
+      state.antiAfkStatus = "Echte Eingabe erkannt";
+      return false;
+    }
+    if (state.lastAntiAfk !== null &&
+        now - state.lastAntiAfk < cfg.antiAfkEveryMs) return false;
     const target = document.querySelector("canvas") || document.body;
-    if (!target) return;
-    const rect = target.getBoundingClientRect();
-    const x = Math.round(rect.left + rect.width / 2);
-    const y = Math.round(rect.top + rect.height / 2);
+    if (!target) {
+      state.antiAfkStatus = "Keine Spielflaeche gefunden";
+      return false;
+    }
     try {
-      // Nur Bewegung, keine Klicks, keine Tasten, keine echten Cursor-Bewegungen.
-      // Simulierte Events werden NICHT als "trusted" ausgegeben.
+      const rect = target.getBoundingClientRect();
+      const x = Math.round(rect.left + rect.width / 2);
+      const y = Math.round(rect.top + rect.height / 2);
+      // Nur synthetische Bewegung, keine Klicks oder spielverandernden Befehle.
+      // isTrusted=false: weder Browser noch Server muessen sie akzeptieren.
       if (typeof PointerEvent === "function") {
         target.dispatchEvent(new PointerEvent("pointermove", {
           bubbles: true, pointerType: "mouse", clientX: x, clientY: y
@@ -623,8 +659,12 @@
       }));
       state.antiAfkTicks++;
       state.lastAntiAfk = now;
+      state.antiAfkStatus = "Impuls gesendet (Wirkung unbestaetigt)";
+      return true;
     } catch (error) {
-      console.warn("[MG V13] Anti-AFK-Impuls fehlgeschlagen:", error);
+      state.antiAfkStatus = "Impuls konnte nicht gesendet werden";
+      console.warn("[MG Standalone] AFK-Impuls fehlgeschlagen:", error?.message);
+      return false;
     }
   }
 
@@ -643,7 +683,38 @@
     state.wakeLagMs = Math.max(0, Date.now() - before - (document.hidden ? Math.max(ms, 1000) : ms));
   }
 
-  // ===== Wiederverbindung: zunächst Spiel selbst reconnecten lassen =====
+  // ===== Wiederverbindung: zuerst immer den nativen Reconnect abwarten =====
+  // Erfolg des Impulses heisst NICHT, dass das Spiel den AFK-Kick verhindert.
+  // Watchdog unabhaengig vom Farm-Loop: bei Hidden-Tabs kann der Browser den
+  // Intervall trotzdem verlangsamen.
+  function watchdogTick() {
+    if (!state.running) return;
+    antiAfkPulse();
+    checkReloadReadiness();
+  }
+  setInterval(watchdogTick, cfg.afkWatchdogMs);
+
+  function readyForFarming() {
+    const ws = getSocket();
+    return !!(ws && bridge.garden && bridge.inventory &&
+      (bridge.sequence > 0 || readFrontier() >= 0));
+  }
+
+  function checkReloadReadiness() {
+    if (!state.running) return;
+    if (readyForFarming()) {
+      state.notReadySince = null;
+      state.reloadLimitReached = false;
+      return;
+    }
+    const now = Date.now();
+    if (state.notReadySince === null) state.notReadySince = now;
+    if (prefs.autoReload && state.connectedOnce &&
+        now - state.notReadySince >= cfg.offlineReloadAfterMs) {
+      controlledReload("Verbindung oder eigener Garten nach Reconnect nicht bereit");
+    }
+  }
+
   function reloadBudgetAvailable() {
     const now = Date.now();
     const recent = readJSON(sessionStorage, KEYS.reloads, [])
@@ -651,11 +722,17 @@
     storeJSON(sessionStorage, KEYS.reloads, recent);
     return recent.length < cfg.reloadLimit;
   }
-  function controlledReload() {
-    if (!prefs.autoReload || !state.running || !state.connectedOnce || state.reloadRequested) return false;
-    if (navigator.onLine === false) return false;
+  function controlledReload(reason = "Verbindung nicht bereit") {
+    if (!prefs.autoReload || !state.running || !state.connectedOnce ||
+        state.reloadRequested || readyForFarming()) return false;
+    // Bei echter Netzunterbrechung auf das Netzwerk warten statt Reload-Spam.
+    if (navigator.onLine === false) {
+      state.connection = "Netzwerk offline – warte";
+      return false;
+    }
     if (!reloadBudgetAvailable()) {
-      state.connection = "Offline – Reload-Limit erreicht";
+      state.reloadLimitReached = true;
+      state.connection = "Reload-Limit erreicht – warte";
       return false;
     }
     const history = readJSON(sessionStorage, KEYS.reloads, []);
@@ -663,11 +740,20 @@
     storeJSON(sessionStorage, KEYS.reloads, history);
     persistTimer();
     storeValue(sessionStorage, KEYS.resume, "1");
+    state.lastReloadReason = reason;
+    storeValue(sessionStorage, KEYS.lastReloadReason, reason);
     state.connection = "Neuladen für Reconnect …";
-    console.warn("[MG V13] Länger offline: Seite wird kontrolliert neu geladen.");
+    console.warn("[MG Standalone] Auto-Neuladen nach langem Verbindungsverlust.");
     state.reloadRequested = true;
-    location.reload();
-    return true;
+    try {
+      location.reload();
+      return true;
+    } catch (error) {
+      state.reloadRequested = false;
+      state.connection = "Auto-Neuladen fehlgeschlagen";
+      console.warn("[MG Standalone] Reload fehlgeschlagen:", error?.message);
+      return false;
+    }
   }
   let lastWs = null;
   async function ensureReady() {
@@ -678,14 +764,13 @@
       if (!ws) {
         if (state.offlineSince === null) state.offlineSince = Date.now();
         state.connection = "Verbindung verloren – warte …";
-        if (Date.now() - state.offlineSince >= cfg.offlineReloadAfterMs) {
-          controlledReload();
-          // Bis zum Reload keine Befehle senden.
-        }
       } else {
         state.connection = !snapshot ? "Warte auf eigene Garten-Daten" :
           !bridge.inventory ? "Warte auf Inventar" : "Warte auf Befehlssequenz";
       }
+      // Nach 90s kontinuierlich fehlender Bereitschaft darf der Watchdog laden.
+      checkReloadReadiness();
+      if (state.reloadLimitReached) state.connection = "Reload-Limit erreicht – warte";
       await waitTick(Math.min(10000, Math.max(1500,
         state.offlineSince ? Math.floor((Date.now() - state.offlineSince) / 10) : 1500)));
       return false;
@@ -693,6 +778,8 @@
     if (state.offlineSince !== null) state.reconnects++;
     state.reloadRequested = false;
     state.offlineSince = null;
+    state.notReadySince = null;
+    state.reloadLimitReached = false;
     state.connectedOnce = true;
     state.connection = "Verbunden";
     state.lastOnline = Date.now();
@@ -784,10 +871,9 @@
     state.currentDelay = Math.min(prefs.maxHarvestDelayMs,
       Math.max(state.currentDelay, cfg.adaptive.initialMs + 50));
 
-    if (state.selfHealAttempts >= 2 && prefs.autoReload && state.connectedOnce) {
-      state.connection = "Self-Healing: kontrollierter Reconnect";
-      if (controlledReload()) return true;
-    }
+    // Kein Seiten-Reload bei gesundem Socket: langes Wachstum, geschuetzte
+    // Pflanzen oder normale Wartezeiten duerfen KEINEN Reload ausloesen.
+    // Nur der Verbindungs-Watchdog entscheidet ueber Auto-Neuladen.
     state.connection = "Self-Healing: kurze Sicherheitspause";
     state.breakerUntil = Math.max(state.breakerUntil, now + 3000);
     console.warn("[MG V13.2] Erntestau erkannt: pruefe Verbindung/Status, pausiere kurz.");
@@ -806,7 +892,6 @@
         try {
           if (!(await ensureReady())) continue;
           if (!state.running) break;
-          antiAfkPulse();
           if (Date.now() < state.breakerUntil) {
             state.connection = "Sicherheitspause";
             await waitTick(Math.min(2000, state.breakerUntil - Date.now()));
@@ -853,6 +938,8 @@
     state.consecutiveErrors = 0;
     state.breakerUntil = 0;
     state.reloadRequested = false;
+    state.lastRealInput = Date.now();
+    state.antiAfkStatus = prefs.antiAfk ? "Warte auf Inaktivitaet" : "Aus";
     storeValue(sessionStorage, KEYS.resume, "1");
     startTimer();
     updatePanel();
@@ -863,8 +950,9 @@
     state.running = false;
     storeValue(sessionStorage, KEYS.resume, "0");
     stopTimer();
+    state.antiAfkStatus = "Gestoppt";
     updatePanel();
-    console.log("[MG V13] Stop angefordert.");
+    console.log("[MG Standalone] Stop angefordert.");
   }
   function onHotkey(event) {
     if (event.code !== "F8" || event.repeat || event.ctrlKey || event.altKey || event.metaKey) return;
@@ -935,6 +1023,14 @@
       nativeSocketObserved: bridge.observedSockets > 0,
       gameStateSubscribed: !!bridge.connection,
       nativeSequenceReady: bridge.sequence > 0,
+      antiAfkEnabled: prefs.antiAfk,
+      antiAfkPulseCount: state.antiAfkTicks,
+      antiAfkStatus: state.antiAfkStatus,
+      autoReloadEnabled: prefs.autoReload,
+      autoReloadLimitReached: state.reloadLimitReached,
+      autoReloadAttemptsLast15m: readJSON(sessionStorage, KEYS.reloads, []).filter(t =>
+        Number.isFinite(t) && t > Date.now() - cfg.reloadWindowMs).length,
+      lastAutoReloadReason: state.lastReloadReason,
       tabHidden: !!document.hidden,
       selectedFieldCount: selectedSlots().size,
       readyProduceCount: getProduce().length,
@@ -1083,6 +1179,8 @@
       `🔁 Reconnects: ${state.reconnects}\n` +
       `🖥 Tab: ${document.hidden ? "Hintergrund (gedrosselt möglich)" : "Sichtbar"}\n` +
       `🛡 Anti-AFK-Impulse: ${state.antiAfkTicks} (nicht garantiert)\n` +
+      `💤 AFK: ${state.antiAfkStatus}\n` +
+      `🔁 Auto-Neuladen: ${prefs.autoReload ? "An" : "Aus"}${state.reloadLimitReached ? " (Limit erreicht)" : ""}\n` +
       `🩺 Self-Healing: ${prefs.selfHealing ? "An" : "Aus"} (${state.selfHealChecks} Prüfungen)\n` +
       `⌨ F8 = Start / Stop`;
     if (fieldCount) fieldCount.textContent = `Ausgewählt: ${selectedSlots().size} / 200`;
@@ -1293,7 +1391,7 @@
     );
     toggles.appendChild(standaloneToggles);
     const note = document.createElement("small");
-    note.textContent = "BETA ohne andere Mods testen. Eigener Schutz fuer native Locks, Mutationen und Max-Size. Anti-AFK ist nicht garantiert.";
+    note.textContent = "BETA: Anti-AFK-Impulse sind kuenstliche Mausbewegungen (kein garantierter Kick-Schutz). Auto-Neuladen erst nach 90s fehlender Spielbereitschaft, maximal 3-mal in 15 Minuten.";
     note.style.cssText = "color:#a8b9ae;display:block;line-height:1.4;margin-top:5px";
     toggles.appendChild(note);
     body.appendChild(toggles);
