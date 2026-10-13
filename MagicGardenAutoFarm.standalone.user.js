@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         Magic Garden AutoFarm Standalone (Beta)
 // @namespace    mg-autofarm-standalone-beta
-// @version      14.0.1
+// @version      14.0.2
 // @updateURL    https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.standalone.user.js
 // @downloadURL  https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.standalone.user.js
-// @description  BETA V14.0.1: standalone farm, experimental AFK pulses, safe reconnect/reload recovery
+// @description  BETA V14.0.2: standalone farm, fixed in-game update checks and Tampermonkey channel
 // @match        https://magicgarden.gg/*
 // @run-at       document-start
 // @grant        none
@@ -88,7 +88,7 @@
   }
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-  const VERSION = "14.0.1";
+  const VERSION = "14.0.2";
   const UPDATE_URL = "https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.standalone.user.js";
   const NUMBER_FIELDS = Object.freeze({
     sellThreshold: { min: 5, max: 200, step: 1 },
@@ -966,11 +966,19 @@
   }
   window.addEventListener("keydown", onHotkey, true);
 
-  // ===== Update-Erkennung: Lesender Abruf; Installation macht Tampermonkey =====
+  // ===== Standalone-Updater: nur das eigene Release akzeptieren =====
+  // Beide Tampermonkey-Metadatenfelder und der Button nutzen denselben Pfad.
+  // V14.0.0 hatte irrtuemlich den V13-Pfad fest einkompiliert. Diese alte
+  // Installation kann den bereits installierten Pfad nicht selbst austauschen.
   const updateInfo = { checkedAt: 0, status: "Noch nicht geprueft", newer: null };
   let updateRunning = false;
-  function parseVersion(source) {
-    return String(source).match(/^\s*\/\/\s*@version\s+(\d+\.\d+\.\d+)\b/m)?.[1] || null;
+  function parseStandaloneRelease(source) {
+    const header = String(source).match(/^\/\/ ==UserScript==\s*\r?\n([\s\S]*?)^\/\/ ==\/UserScript==/m)?.[1];
+    if (!header) return null;
+    if (!/^\/\/\s*@namespace\s+mg-autofarm-standalone-beta\s*$/m.test(header)) return null;
+    if (!/^\/\/\s*@name\s+Magic Garden AutoFarm Standalone \(Beta\)\s*$/m.test(header)) return null;
+    // Versionsnummer ausschließlich aus dem validierten Userscript-Header.
+    return header.match(/^\/\/\s*@version\s+(\d+\.\d+\.\d+)\s*$/m)?.[1] || null;
   }
   function compareVersions(a, b) {
     const x = a.split(".").map(Number), y = b.split(".").map(Number);
@@ -985,18 +993,25 @@
     }
     updateRunning = true;
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 6000);
+    const timeout = setTimeout(() => controller.abort(), 8000);
     try {
-      const response = await fetch(UPDATE_URL, { cache: "no-store", signal: controller.signal });
+      // credentials:"omit" vermeidet CORS-Fehler durch Credential-/Wildcard-Mix.
+      // Query-Parameter umgehen alte Edge-/Proxy-Caches; Link selbst bleibt konstant.
+      const response = await fetch(UPDATE_URL + "?check=" + Date.now(), {
+        cache: "no-store", credentials: "omit", mode: "cors", signal: controller.signal
+      });
       if (!response.ok) throw new Error("HTTP " + response.status);
-      const remote = parseVersion(await response.text());
-      if (!remote) throw new Error("Versionsnummer fehlt");
-      updateInfo.newer = compareVersions(remote, VERSION) > 0 ? remote : null;
-      updateInfo.status = updateInfo.newer
-        ? "Update verfuegbar: V" + remote
-        : "Aktuell (main: V" + remote + ")";
+      const remote = parseStandaloneRelease(await response.text());
+      if (!remote) throw new Error("Keine gueltige Standalone-Version");
+      const comparison = compareVersions(remote, VERSION);
+      updateInfo.newer = comparison > 0 ? remote : null;
+      updateInfo.status = comparison > 0
+        ? "Standalone-Update verfuegbar: V" + remote
+        : comparison < 0
+          ? "Server-Version aelter (deine V" + VERSION + ")"
+          : "Standalone aktuell: V" + VERSION;
     } catch (error) {
-      updateInfo.status = "Update-Check nicht moeglich";
+      updateInfo.status = "Update-Check fehlgeschlagen (Verbindung/Release)";
       updateInfo.newer = null;
     } finally {
       clearTimeout(timeout);
@@ -1004,7 +1019,7 @@
       updateRunning = false;
       updatePanel();
     }
-    return { ...updateInfo };
+    return { ...updateInfo, url: UPDATE_URL };
   }
 
   // ===== Diagnose OHNE IDs, Chat, Koordinaten, Inventarinhalte oder Token =====
@@ -1444,7 +1459,7 @@
     updateLink.href = UPDATE_URL;
     updateLink.target = "_blank";
     updateLink.rel = "noopener noreferrer";
-    updateLink.textContent = "Installieren";
+    updateLink.textContent = "Standalone aktualisieren";
     updateLink.style.cssText = "display:none;color:#91efb4;font-size:12px";
     updateControls.appendChild(updateLink);
     diagnosticStatus = document.createElement("div");
