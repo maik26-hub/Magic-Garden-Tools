@@ -17,7 +17,7 @@ function store() {
   };
 }
 
-function createHarness({ withCanvas = false } = {}) {
+function createHarness({ withCanvas = false, resumeOnLoad = false } = {}) {
   const localStorage = store(), sessionStorage = store(), tasks = [];
   const events = [], handlers = new Map();
   let now = Date.now(), reloadCount = 0;
@@ -31,6 +31,9 @@ function createHarness({ withCanvas = false } = {}) {
   };
   localStorage.setItem('magic_garden_selected_tiles_v1',
     JSON.stringify({ left: [0, 1, 2], right: [] }));
+  if (resumeOnLoad) {
+    sessionStorage.setItem('magic_garden_standalone_beta_should_resume', '1');
+  }
 
   class Socket {
     static OPEN = 1;
@@ -335,4 +338,39 @@ test('healthy connection and quick native reconnect do not reload after several 
   h.runWatchdog();
   assert.equal(h.getReloads(), 0, 'reconnected before threshold');
   h.api.stop();
+});
+
+
+test('Auto-Resume from session storage waits for native game readiness and Stop disables it', async () => {
+  const h = createHarness({ resumeOnLoad: true });
+  assert.equal(h.api.state.running, true);
+  assert.equal(h.api.state.autoResumed, true);
+  assert.equal(h.api.state.connectedOnce, false);
+  assert.equal(h.ws.sent.length, 0);
+  h.receiveOwnState({
+    0: { objectType: 'plant', slots: [{ slotId: 0, endTime: 0, locked: true }] }
+  });
+  await flush();
+  assert.equal(h.ws.sent.length, 0, 'protected crop is not harvested');
+  h.api.stop();
+  assert.equal(h.sessionStorage.getItem('magic_garden_standalone_beta_should_resume'), '0');
+});
+
+test('Self-Healing never reloads a healthy socket just because crops are ripe', async () => {
+  const h = createHarness();
+  h.receiveOwnState({
+    0: { objectType: 'plant', slots: [{ slotId: 0, endTime: 0 }] }
+  });
+  h.api.prefs.autoReload = true;
+  h.api.start();
+  await flush();
+  h.advanceTime(350000);
+  h.runWatchdog();
+  assert.equal(h.getReloads(), 0);
+  h.api.stop();
+});
+
+test('standalone update channel never points to stable V13 script', () => {
+  assert.match(source, /@updateURL\s+https:\/\/raw\.githubusercontent\.com\/maik26-hub\/Magic-Garden-Tools\/main\/MagicGardenAutoFarm\.standalone\.user\.js/);
+  assert.match(source, /@downloadURL\s+https:\/\/raw\.githubusercontent\.com\/maik26-hub\/Magic-Garden-Tools\/main\/MagicGardenAutoFarm\.standalone\.user\.js/);
 });
