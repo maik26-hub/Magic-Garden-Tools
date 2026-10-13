@@ -1,99 +1,55 @@
 # 🌱 Magic Garden AutoFarm
 
-**Automatisches Ernten und Verkaufen für [Magic Garden](https://magicgarden.gg/) – direkt im Browser über Tampermonkey.**
+**Ein eigenständiges Tampermonkey-Userscript für [Magic Garden](https://magicgarden.gg/): automatisches Ernten, Verkaufen und Kontrollieren der Farming-Session.**
 
-> **Aktuelle Version:** V13.2.3 · Inoffizielles Community-Projekt, nicht mit Magic Garden verbunden.
+**Aktuelle Hauptversion: V14.0.3.** Inoffizielles Community-Projekt; nicht mit Magic Garden verbunden.
 
-## 🧪 Standalone-Beta V14.0.2
+## 🔄 Upgrade von V13.2.3 auf V14 (ohne Link)
 
-Eine **getrennte Testversion ohne QPM, Garden Companion und Arie's Mod** ist verfügbar.
-Sie benötigt nur Magic Garden und Tampermonkey. Die bisherigen V13-Skripte vorher deaktivieren.
+**In deiner vorhandenen V13.2.3:**
 
-**[Standalone-Beta installieren](https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.standalone.user.js)** · [Testanleitung und Einschränkungen](STANDALONE-BETA.md)
+1. Magic Garden öffnen → AutoFarm-Menü → **Update prüfen**.
+2. Die Meldung **„Update verfuegbar: V14.0.3“** erscheint (Internet/GitHub-Zugriff vorausgesetzt).
+3. Auf **Installieren** klicken und die Aktualisierung **des vorhandenen Magic Garden AutoFarm-Userscripts** in Tampermonkey bestätigen.
+4. Magic Garden neu laden. Das Menü und die Konsole melden V14.0.3.
 
-Anti-AFK-Impulse und Auto-Neuladen können im Menü aktiviert werden; beide sind zunächst deaktiviert. Der AFK-Schutz ist experimentell und muss in einer echten längeren Session geprüft werden. **V13.2.3 bleibt die reguläre Version.**
+Die alte V13 und die neue V14 verwenden absichtlich dieselbe Tampermonkey-Identität und denselben Pfad:
+`@name Magic Garden AutoFarm`, `@namespace mg-autofarm-local`, `MagicGardenAutoFarm.user.js`.
+**Es muss nicht erst eine Beta installiert oder ein neuer Link verschickt werden.**
 
-**Bestehende V14.0.0-Installationen:** Der In-Game-Update-Button dieser ersten Beta prüft leider die alte V13-Datei. Statt den Button zu verwenden, in **Tampermonkey nach Userscript-Updates suchen**. Die ursprüngliche Installationsadresse auf dem Beta-Branch bleibt als Update-Brücke verfügbar. Falls das Skript ohne Installationsadresse kopiert wurde, ist einmaliges Neuinstallieren nötig. Ab V14.0.1 sind Standalone-Updater und V13-Update-Kanal getrennt. [Details](STANDALONE-BETA.md).
+*Erhalten bleiben* die Feldauswahl, Menüposition, gespeicherte Einstellungen, Laufzeit und Auto-Resume-Markierung (die alten Storage-Schlüssel werden weiterverwendet). V14 benötigt **weder QPM noch Garden Companion noch Arie's Mod**. Für den ersten Live-Test diese zusätzlichen Userscripts möglichst deaktivieren, damit WebSocket-Befehle nicht mehrfach nummeriert werden. Das deaktiviert keine anderen Skripte automatisch.
 
-## 🚀 Installation
-
-**Voraussetzungen:**
-- Chrome, Brave oder ein anderer Browser mit [Tampermonkey](https://www.tampermonkey.net/)
-- Das separate Userscript **Garden Companion** muss installiert und aktiviert sein. Es liefert die benötigten Spieldaten und stellt unter anderem den Pflanzenschutz bereit.
-
-1. Installiere Tampermonkey und Garden Companion.
-2. **[Magic Garden AutoFarm installieren](https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js)** – der Link öffnet bei korrekt eingerichteter Tampermonkey-Installation den Installationsdialog.
-3. Klicke auf **Installieren** und öffne [Magic Garden](https://magicgarden.gg/).
-4. Wähle die gewünschten Felder und klicke auf **▶ Start**.
-
-**Wichtig:** Aktiviere nur **eine** Version von Magic Garden AutoFarm gleichzeitig. Garden Companion muss aktiv bleiben.
+Neue Nutzer können direkt die [aktuelle Hauptversion installieren](https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js).
 
 ## ✨ Funktionen
 
-| Funktion | Beschreibung |
+| Funktion | Verhalten |
 | --- | --- |
-| 🌾 Auto-Harvest | Erntet reife Pflanzen auf ausgewählten Feldern. |
-| 💰 Auto-Sell | Verkauft nicht favorisierte Erzeugnisse automatisch, sobald mindestens 40 verkaufbare Items vorliegen. |
-| ⚡ Adaptive Geschwindigkeit | Passt die Pause zwischen Ernten an Serverantwortzeiten an (75–1.000 ms). |
-| 🧩 Feldauswahl | 2 × 10 × 10 Felder, dauerhaft gespeichert. Felder per Klick oder durch Gedrückthalten und Ziehen markieren/abwählen – auch über beide Gartenhälften. |
-| ⏱️ Session-Zähler | Laufzeit, Ernten, Verkäufe, verdiente Coins und Fehlerzähler lassen sich gemeinsam zurücksetzen – die Farm läuft weiter. |
-| 💤 Anti-AFK (experimentell) | Sendet synthetische Mausbewegungsereignisse nach Inaktivität. **Kein garantierter Schutz vor AFK-Kicks.** |
-| 🔌 Auto-Reconnect | Wartet bei Verbindungsverlust und kann nach längerer Unterbrechung kontrolliert neu laden. |
-| 🔁 Auto-Resume | Setzt einen zuvor aktiven Lauf nach Neuladen im selben Tab fort. |
-| 🛡️ Fehlerbehandlung | Wartet bei vorübergehenden Problemen und respektiert den Pflanzenschutz von Garden Companion. Abgelehnte Ernten (`rejected`) werden getrennt gezählt und ohne adaptive Bestrafung übersprungen. |
-| ⌨️ F8-Hotkey | Startet oder stoppt die AutoFarm ohne Öffnen des Menüs. |
-| 📦 Hintergrundbetrieb | Erkennt inaktive Tabs; Browser-Drosselung kann den Betrieb trotzdem verlangsamen. |
-| 📋 Einklappbares, verschiebbares Menü | Start/Stop, Status, Laufzeit, Feldauswahl; Position bleibt nach F5 gespeichert. |
-| 🩺 Self-Healing | Erkennt wiederholten Erntestau bei verfügbaren ungeschützten Pflanzen; pausiert und nutzt bei Bedarf begrenztes Auto-Neuladen. |
-| ⚙️ Gespeicherte Einstellungen | Verkaufsschwelle, Prüfintervall, Erntepausen und Erntestau-Schwelle im Menü ändern. |
-| 🔄 GitHub-Update-Anzeige | Prüft die Versionsnummer auf `main`; Tampermonkey übernimmt die eigentliche Installation. |
-| 📋 Diagnose kopieren | Erstellt technische Kennzahlen ohne IDs, Rohdaten, Cookies oder Inventarinhalte. |
+| Auto-Harvest | Erntet reife Pflanzen nur auf selbst ausgewählten Feldern |
+| Auto-Sell | Verkauft nach Schwellenwert, sofern die Liste der favorisierten Items verfügbar ist; andernfalls wird nicht blind verkauft |
+| Direkte Spielanbindung | Eigener WebSocket-Beobachter, eigener Garten und Inventar aus dem nativen Spielzustand; eigene Sequenzierung |
+| Pflanzenschutz | Native Sperren und konservierter Status werden respektiert; Mutationen und Größe 100 standardmäßig geschützt |
+| Feldauswahl | 200 Felder, per Klick oder Ziehen markieren; Speicherung über Updates hinweg |
+| Adaptive Geschwindigkeit | Reagiert auf bestätigte Antwortzeiten; abgelehnte Ernten werden separat behandelt |
+| Anti-AFK (experimentell) | Sendet bei Inaktivität synthetische Mausbewegungen; **kein garantierter Schutz gegen AFK-Kicks** |
+| Auto-Neuladen | Bei mehr als 90 Sekunden fehlender Spielbereitschaft; maximal 3-mal in 15 Minuten, falls aktiviert |
+| Auto-Resume | Setzt eine zuvor aktive Session nach dem Neuladen im selben Tab fort |
+| Bedienung | F8 Start/Stop, verschiebbares Panel, Session-Reset, Statistiken und datensparsame Diagnose |
+| In-Game-Updates | „Update prüfen“ liest die aktuelle Hauptversion auf GitHub; „Installieren“ öffnet die Tampermonkey-Aktualisierung |
 
-## 🎮 Bedienung
+## ⚙️ Hinweise
 
-- **▶ Start:** AutoFarm einschalten.
-- **■ Stop:** AutoFarm und Timer anhalten.
-- **↺ Session zurücksetzen (Zeit + Zähler):** Laufzeit und Session-Statistiken gemeinsam auf null setzen. **Das Coin-Guthaben im Spiel bleibt unverändert.**
-- **F8:** Zwischen Start und Stop umschalten (außer beim Tippen in Eingabefeldern).
-- **+/−:** Menü aus- oder einklappen.
-- **Grüne Felder:** Für die Ernte ausgewählt; Änderungen werden automatisch gespeichert.
-- **Felder per Ziehen auswählen:** Maustaste auf einem Feld gedrückt halten und über weitere ziehen. Start auf einem dunklen Feld = markieren; Start auf einem grünen Feld = abwählen. Funktioniert auch per Touch.
-- **Optionen im Menü:** Adaptive Geschwindigkeit, experimenteller Anti-AFK und Auto-Neuladen können einzeln deaktiviert werden.
+- **Nur eine AutoFarm-Version gleichzeitig aktivieren.** Die gesonderte Datei `MagicGardenAutoFarm.standalone.user.js` war ein früher Beta-Testkanal und soll nicht parallel zur Hauptversion laufen.
+- Anti-AFK und Auto-Neuladen sind im Menü separat einstellbar. Beim Update von V13 werden bestehende Einstellungen übernommen.
+- Das Spiel kann seine internen Zustands- und WebSocket-Schnittstellen ändern. Nach Updates des Spiels kann eine Anpassung nötig sein.
+- Bei unbekanntem Spieler, fehlenden Gartendaten oder nicht sicherem Inventar wird vorsichtshalber nicht geerntet beziehungsweise verkauft.
+- Automatisierung kann gegen die Regeln des Spiels verstoßen. Keine Cookies, Tokens, privaten WebSocket-Daten oder Login-Informationen weitergeben.
+- Technische Kurzdiagnose bei Problemen: `MGAutoFarmV13.status()` (der Konsolenname bleibt aus Kompatibilitätsgründen erhalten).
 
-## 🔧 Einstellungen und Diagnose (V13.2)
+## 🧪 Tests und Releases
 
-Im Menü lassen sich Auto-Sell-Schwelle, Verkaufsprüfung, minimale und maximale Erntepause sowie die Schwelle für Self-Healing ändern. Alle Werte werden im Browser gespeichert. V13.2 respektiert weiterhin die geschützten Pflanzen von Garden Companion.
+Die Hauptversion wird mit `node --test tests/main-upgrade.test.cjs` geprüft. Für den separaten Beta-Kanal gibt es `tests/standalone.test.cjs`.
 
-Der Button **Update prüfen** liest nur die veröffentlichte Versionsnummer auf GitHub. Mit **Diagnose kopieren** werden ausschließlich technische Zähler und Statuswerte kopiert, keine Spielidentifikatoren oder privaten Daten.
+**Ein Release für bestehende V13-Nutzer muss die Version in `MagicGardenAutoFarm.user.js` anheben**. Eine neue Datei unter anderem Namen wird nicht vom alten Menü erkannt. Name, Namespace und die beiden Update-URLs dürfen nicht versehentlich geändert werden.
 
-## 🔄 Updates
-
-Tampermonkey kann neue Versionen automatisch erkennen, sofern die Datei über den Installationslink installiert wurde und im Skript `@updateURL` sowie `@downloadURL` korrekt eingetragen sind.
-
-Für neue Releases dieselbe Datei **`MagicGardenAutoFarm.user.js`** ersetzen und die Versionsnummer in `@version` erhöhen. Manuell prüfen: **Tampermonkey → Dashboard → Nach Updates suchen**.
-
-## ⚠️ Hinweise
-
-- **Anti-AFK ist nicht garantiert:** künstliche Browserereignisse gelten nicht als echte Benutzereingaben und können ignoriert werden.
-- Das Skript benötigt den aktuellen Spielzustand und die WebSocket-Integration von Garden Companion; Spieländerungen können Funktionen beeinträchtigen.
-- Geschützte Pflanzen sollen **nicht** gegen den Pflanzenschutz geerntet werden.
-- Automatisierung kann gegen die Regeln des jeweiligen Spiels verstoßen. Verwendung auf eigenes Risiko.
-- Keine Zugangsdaten, Cookies oder privaten WebSocket-Mitschnitte veröffentlichen.
-
-## 🩺 Abgelehnte Ernten (V13.2.3)
-
-Wenn Garden Companion oder das Spiel `HarvestCrop` mit `code: "rejected"` ablehnt, ist das **nicht automatisch ein Geschwindigkeitsproblem**. Die AutoFarm ignoriert diese Ablehnung daher bei der adaptiven Erntepause, meldet sie unter **Ablehnungen** und versucht denselben Slot erst nach 10 Minuten erneut. Bei drei Ablehnungen ohne eine erfolgreiche Ernte folgt eine 30-Sekunden-Sicherheitspause.
-
-Pflanzenschutz bleibt aktiv. Der Bot erzwingt keine Ernten. Wenn die Ablehnungen weiterhin stark zunehmen, AutoFarm stoppen und testweise andere Userscripts auf Konflikte prüfen; insbesondere bei mehrfachen, überschriebenen Garten-Snapshots.
-
-## 🛠️ Fehlersuche
-
-Wenn nichts passiert, prüfe, ob Magic Garden geladen ist, **Garden Companion aktiv** ist und nicht gleichzeitig eine ältere AutoFarm läuft. Weitere Statusdaten findest du mit `F12` in der Konsole:
-
-```javascript
-MGAutoFarmV13.status()
-```
-
----
-
-**Repository:** [maik26-hub/Magic-Garden-Tools](https://github.com/maik26-hub/Magic-Garden-Tools)
+[Ältere Standalone-Beta und Migrationshinweise](STANDALONE-BETA.md) · [GitHub-Repository](https://github.com/maik26-hub/Magic-Garden-Tools)
