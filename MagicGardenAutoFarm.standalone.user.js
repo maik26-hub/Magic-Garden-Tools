@@ -1079,6 +1079,7 @@
       `⚡ Erntepause: ${prefs.adaptive ? state.currentDelay : cfg.adaptive.initialMs} ms\n` +
       `📡 Antwort: ${state.lastResponseMs} ms (Ø ${Math.round(state.averageResponseMs)} ms)\n` +
       `🔌 ${state.connection}\n` +
+      `🧩 Standalone: Socket ${getSocket() ? "bereit" : "fehlt"}, Daten ${bridge.garden ? "bereit" : "fehlen"}, Sequenz ${bridge.sequence > 0 ? "bereit" : "warte"}\n` +
       `🔁 Reconnects: ${state.reconnects}\n` +
       `🖥 Tab: ${document.hidden ? "Hintergrund (gedrosselt möglich)" : "Sichtbar"}\n` +
       `🛡 Anti-AFK-Impulse: ${state.antiAfkTicks} (nicht garantiert)\n` +
