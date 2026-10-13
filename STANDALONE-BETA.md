@@ -1,10 +1,20 @@
-# Magic Garden AutoFarm – Standalone Beta V14.0.1
+# Magic Garden AutoFarm – Standalone Beta V14.0.2
 
 **Experimentell – getrennte Beta-Datei. Die bisherige V13 auf `main` bleibt als stabile Variante bestehen.**
 
 ## Ziel
 
 Die AutoFarm soll nur Tampermonkey und Magic Garden benötigen; keine Skripte wie QPM, Garden Companion oder Arie's Mod. Im Gegensatz zu V13 liest die Beta die eigenen Spielerdaten über die **native `MagicCircle_RoomConnection.subscribeToPatches`**-Schnittstelle und beobachtet den **nativen WebSocket**. Die `Welcome`-Nachricht dient zum Identifizieren des eigenen Spielers und Initialisieren der `QuinoaCommand`-Sequenznummern. Bei fehlenden oder nicht eindeutig zuordenbaren Daten wird **keine Ernte** ausgeführt.
+
+## Updates und Migration ohne Linkversand
+
+**Ab V14.0.1** verwenden Tampermonkey und der In-Game-Button `Update prüfen` ausschließlich den separaten Standalone-Release-Pfad auf `main`. Die V13-Datei bleibt davon unabhängig.
+
+**Für die erste V14.0.0** war im Spiel-Menü versehentlich die V13-Datei eingetragen; auch deren `Installieren`-Button verlinkt V13. **Diesen Menü-Button in V14.0.0 nicht zum Installieren benutzen.**
+
+- Wer V14.0.0 direkt über den ursprünglich verteilten GitHub-Beta-Link installiert hat, kann in **Tampermonkey** die installierten Userscripts auf Updates prüfen lassen. Das ursprüngliche Installationsziel `feature/v14-standalone-beta/MagicGardenAutoFarm.standalone.user.js` wird synchron mit dem Standalone-Release gehalten. Bei aktiviertem Update-Check sollte Tampermonkey die neuere Version erkennen, auch wenn im Spiel kein Update angezeigt wird.
+- Nach der ersten Aktualisierung verwenden die installierten Skripte den festen `main`-Update-Kanal. **Danach sind keine weiteren Installationslinks nötig**: der Button im Spiel erkennt neue Versionen, Tampermonkey führt die Installation durch.
+- War das Skript ohne Quell-URL eingefügt oder wurden Tampermonkey-Updates ausgeschaltet, kann einmalig eine erneute Installation beziehungsweise Korrektur der Update-URL in Tampermonkey nötig sein. GitHub kann fest eingebrannte Links bereits installierter Skripte nicht rückwirkend ändern.
 
 ## Testinstallation ohne Konsole
 
@@ -28,12 +38,12 @@ Die AutoFarm soll nur Tampermonkey und Magic Garden benötigen; keine Skripte wi
 - Die Beta behält die 200-Feldauswahl, Drag-Marking, Statistiken, Timer/Session-Reset, adaptive Geschwindigkeit und Diagnose bei.
 - Das Spiel kann seine internen Schnittstellen jederzeit ändern. Der direkte Zugriff ist noch **nicht gegen die aktuelle Live-Version verifiziert**.
 - Bei anderen installierten Skripten, die WebSocket-Befehle ebenfalls neu nummerieren, kann es erneut Sequenzkonflikte geben. Daher zuerst ohne weitere Mods testen.
-- Die Beta hat **eigene** `@updateURL`/`@downloadURL`-Adressen zu `MagicGardenAutoFarm.standalone.user.js` auf `main`, ohne den regulären V13-Update-Kanal zu verändern. Separate Beta-Präferenz- und Session-Schlüssel bleiben erhalten.
+- Die Beta hat **eigene** `@updateURL`/`@downloadURL`-Adressen zu `MagicGardenAutoFarm.standalone.user.js` auf `main`. Der In-Game-Check prüft den Versionsstand aus einem validierten Standalone-Userscript-Header (Name, Namespace, Version), ohne Browser-Credentials, und bietet niemals eine V13-Datei als Standalone-Update an. Separate Beta-Präferenz- und Session-Schlüssel bleiben erhalten.
 
 ## Testabdeckung
 
 `node --test tests/standalone.test.cjs`
 
-Die simulierten Tests prüfen native Spielerdaten, Locks und Mutationsschutz, unklare Spieleridentität, Befehlssequenzen, Reconnect, AFK-Impulse bei Inaktivität, Safety-Cooldowns, Reload-Grenzen, Netzwerkoffline-Verhalten, Auto-Resume sowie die getrennten Update-Kanäle.
+Die simulierten Tests prüfen native Spielerdaten, Locks und Mutationsschutz, unklare Spieleridentität, Befehlssequenzen, Reconnect, AFK-Impulse bei Inaktivität, Safety-Cooldowns, Reload-Grenzen, Netzwerkoffline-Verhalten, Auto-Resume sowie Update-Versionsvergleich, Validierung gegen fremde V13-Skripte und CORS-/Netzwerkfehler.
 
 **Noch offen:** Eine längere Live-Session zum Prüfen, ob das Spiel die künstlichen AFK-Impulse akzeptiert und ob nach einem echten Verbindungsabbruch zuverlässig neu geladen wird. Der Nutzer hat den grundlegenden Standalone-Start bereits als funktionierend gemeldet. Die produktive `MagicGardenAutoFarm.user.js` bleibt unverändert.

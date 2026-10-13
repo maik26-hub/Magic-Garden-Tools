@@ -20,6 +20,8 @@ function store() {
 function createHarness({ withCanvas = false, resumeOnLoad = false } = {}) {
   const localStorage = store(), sessionStorage = store(), tasks = [];
   const events = [], handlers = new Map();
+  const fetchCalls = [];
+  let remoteSource = source, fetchFailure = null, fetchStatus = 200;
   let now = Date.now(), reloadCount = 0;
   class FakeDate extends Date { static now() { return now; } }
   class FakeMouseEvent {
@@ -84,7 +86,12 @@ function createHarness({ withCanvas = false, resumeOnLoad = false } = {}) {
     clearTimeout() {},
     setInterval: (fn, ms) => { tasks.push({ fn, ms }); return tasks.length; },
     console: { log() {}, info() {}, warn() {}, error() {}, table() {} },
-    fetch: async () => ({ ok: true, text: async () => source })
+    fetch: async (url, options) => {
+      fetchCalls.push({ url, options });
+      if (fetchFailure) throw fetchFailure;
+      return { ok: fetchStatus >= 200 && fetchStatus < 300,
+        status: fetchStatus, text: async () => remoteSource };
+    }
   };
 
   vm.runInNewContext(source, context, { timeout: 3000 });
@@ -109,6 +116,10 @@ function createHarness({ withCanvas = false, resumeOnLoad = false } = {}) {
 
   return {
     api, window, ws, sendPatch, tasks, localStorage, sessionStorage, events, context,
+    fetchCalls,
+    setRemoteSource(value) { remoteSource = value; },
+    setFetchFailure(error) { fetchFailure = error; },
+    setFetchStatus(status) { fetchStatus = status; },
     advanceTime(ms) { now += ms; },
     getReloads() { return reloadCount; },
     runWatchdog() {
@@ -373,4 +384,67 @@ test('Self-Healing never reloads a healthy socket just because crops are ripe', 
 test('standalone update channel never points to stable V13 script', () => {
   assert.match(source, /@updateURL\s+https:\/\/raw\.githubusercontent\.com\/maik26-hub\/Magic-Garden-Tools\/main\/MagicGardenAutoFarm\.standalone\.user\.js/);
   assert.match(source, /@downloadURL\s+https:\/\/raw\.githubusercontent\.com\/maik26-hub\/Magic-Garden-Tools\/main\/MagicGardenAutoFarm\.standalone\.user\.js/);
+});
+
+
+test('manual V14 update check accepts only a newer standalone version and omits credentials', async () => {
+  const h = createHarness();
+  h.setRemoteSource(source.replace('// @version      14.0.2',
+    '// @version      14.0.3'));
+  const result = await h.api.checkForUpdate(true);
+  assert.equal(result.newer, '14.0.3');
+  assert.match(result.status, /Standalone-Update verfuegbar/);
+  assert.ok(result.url.endsWith('/MagicGardenAutoFarm.standalone.user.js'));
+  assert.equal(h.fetchCalls.length, 1);
+  assert.ok(h.fetchCalls[0].url.startsWith(result.url + '?check='));
+  assert.equal(h.fetchCalls[0].options.credentials, 'omit');
+  assert.equal(h.fetchCalls[0].options.mode, 'cors');
+  assert.equal(h.fetchCalls[0].options.cache, 'no-store');
+});
+
+test('manual update check correctly reports already-current standalone release', async () => {
+  const h = createHarness();
+  const result = await h.api.checkForUpdate(true);
+  assert.equal(result.newer, null);
+  assert.equal(result.status, 'Standalone aktuell: V14.0.2');
+});
+
+test('manual update check rejects a V13 file despite a higher metadata version', async () => {
+  const h = createHarness();
+  h.setRemoteSource(
+    '// ==UserScript==\n' +
+    '// @name Magic Garden AutoFarm\n' +
+    '// @namespace mg-autofarm-local\n' +
+    '// @version 99.9.9\n' +
+    '// ==/UserScript==\n'
+  );
+  const result = await h.api.checkForUpdate(true);
+  assert.equal(result.newer, null, 'never offer the wrong product');
+  assert.match(result.status, /Update-Check fehlgeschlagen/);
+});
+
+test('manual update check handles a blocked network request without false upgrades', async () => {
+  const h = createHarness();
+  h.setFetchFailure(new Error('CORS'));
+  const result = await h.api.checkForUpdate(true);
+  assert.equal(result.newer, null);
+  assert.match(result.status, /Update-Check fehlgeschlagen/);
+});
+
+test('manual update check reports remote older without downgrade', async () => {
+  const h = createHarness();
+  h.setRemoteSource(source.replace('// @version      14.0.2',
+    '// @version      14.0.1'));
+  const result = await h.api.checkForUpdate(true);
+  assert.equal(result.newer, null);
+  assert.match(result.status, /Server-Version aelter/);
+});
+
+test('metadata and update check both use one standalone release filename', () => {
+  const target = 'MagicGardenAutoFarm.standalone.user.js';
+  const base = 'https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/';
+  assert.ok(source.includes('// @updateURL    ' + base + target));
+  assert.ok(source.includes('// @downloadURL  ' + base + target));
+  assert.ok(source.includes('const UPDATE_URL = "' + base + target + '"'));
+  assert.ok(!source.includes('const UPDATE_URL = "' + base + 'MagicGardenAutoFarm.user.js"'));
 });
