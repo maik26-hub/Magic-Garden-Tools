@@ -4,7 +4,7 @@
 
 > **Aktuelle Version:** V13.2.3 · Inoffizielles Community-Projekt, nicht mit Magic Garden verbunden.
 
-## 🧪 Standalone-Beta V14.0.1
+## 🧪 Standalone-Beta V14.0.2
 
 Eine **getrennte Testversion ohne QPM, Garden Companion und Arie's Mod** ist verfügbar.
 Sie benötigt nur Magic Garden und Tampermonkey. Die bisherigen V13-Skripte vorher deaktivieren.
@@ -12,6 +12,8 @@ Sie benötigt nur Magic Garden und Tampermonkey. Die bisherigen V13-Skripte vorh
 **[Standalone-Beta installieren](https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.standalone.user.js)** · [Testanleitung und Einschränkungen](STANDALONE-BETA.md)
 
 Anti-AFK-Impulse und Auto-Neuladen können im Menü aktiviert werden; beide sind zunächst deaktiviert. Der AFK-Schutz ist experimentell und muss in einer echten längeren Session geprüft werden. **V13.2.3 bleibt die reguläre Version.**
+
+**Bestehende V14.0.0-Installationen:** Der In-Game-Update-Button dieser ersten Beta prüft leider die alte V13-Datei. Statt den Button zu verwenden, in **Tampermonkey nach Userscript-Updates suchen**. Die ursprüngliche Installationsadresse auf dem Beta-Branch bleibt als Update-Brücke verfügbar. Falls das Skript ohne Installationsadresse kopiert wurde, ist einmaliges Neuinstallieren nötig. Ab V14.0.1 sind Standalone-Updater und V13-Update-Kanal getrennt. [Details](STANDALONE-BETA.md).
 
 ## 🚀 Installation
 
