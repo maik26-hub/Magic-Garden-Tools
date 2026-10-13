@@ -23,10 +23,10 @@
   const KEYS = {
     selection: "magic_garden_selected_tiles_v1",      // kompatibel mit V11/V12
     collapsed: "magic_garden_v11_ui_collapsed",          // kompatibel mit V11/V12
-    prefs: "magic_garden_v13_preferences",
-    resume: "magic_garden_v13_should_resume",           // sessionStorage: pro Tab
-    timer: "magic_garden_v13_elapsed_ms",               // sessionStorage
-    reloads: "magic_garden_v13_reload_history",         // sessionStorage
+    prefs: "magic_garden_standalone_beta_preferences",
+    resume: "magic_garden_standalone_beta_should_resume",           // sessionStorage: pro Tab
+    timer: "magic_garden_standalone_beta_elapsed_ms",               // sessionStorage
+    reloads: "magic_garden_standalone_beta_reload_history",         // sessionStorage
     panelPosition: "magic_garden_v13_panel_position"   // localStorage
   };
 
@@ -99,8 +99,8 @@
   }
   const savedPrefs = readJSON(localStorage, KEYS.prefs, {});
   const prefs = {
-    antiAfk: savedPrefs.antiAfk !== false,
-    autoReload: savedPrefs.autoReload !== false,
+    antiAfk: savedPrefs.antiAfk === true,
+    autoReload: savedPrefs.autoReload === true,
     adaptive: savedPrefs.adaptive !== false,
     selfHealing: savedPrefs.selfHealing !== false,
     protectMutations: savedPrefs.protectMutations !== false,
