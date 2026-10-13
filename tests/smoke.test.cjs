@@ -263,7 +263,9 @@ test('rejected harvests do not increase adaptive delay, preserve protection, and
     code: 'rejected'
   };
   for (const fn of [...listeners]) fn({ data: JSON.stringify(reply) });
-  await new Promise(resolve => setImmediate(resolve));
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
 
   assert.equal(api.state.rejectedHarvests, 1);
   assert.equal(api.state.errors, 0);
@@ -291,5 +293,5 @@ test('harvest protections, selling, adaptive speed, and drag selection remain in
   assert.match(source, /function isHarvestRejected\(error\)/);
   assert.match(source, /type: "SellAllCrops"/);
   assert.match(source, /installFieldPainting\(fields\)/);
-  assert.match(source, /if \(!err \|\| \(!isHarvestRejected\(err\)/);
+  assert.ok(source.includes('(!err || (!isHarvestRejected(err)'));
 });
