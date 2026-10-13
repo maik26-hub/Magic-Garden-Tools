@@ -17,8 +17,18 @@ function store() {
   };
 }
 
-function createHarness() {
+function createHarness({ withCanvas = false } = {}) {
   const localStorage = store(), sessionStorage = store(), tasks = [];
+  const events = [], handlers = new Map();
+  let now = Date.now(), reloadCount = 0;
+  class FakeDate extends Date { static now() { return now; } }
+  class FakeMouseEvent {
+    constructor(type, fields = {}) { this.type = type; this.isTrusted = false; Object.assign(this, fields); }
+  }
+  const canvas = {
+    getBoundingClientRect() { return { left: 0, top: 0, width: 100, height: 100 }; },
+    dispatchEvent(event) { events.push(event); return true; }
+  };
   localStorage.setItem('magic_garden_selected_tiles_v1',
     JSON.stringify({ left: [0, 1, 2], right: [] }));
 
@@ -43,15 +53,29 @@ function createHarness() {
     send(payload) { this.sent.push(JSON.parse(payload)); }
   }
 
-  const window = { WebSocket: Socket, addEventListener() {} };
-  const document = { body: null, hidden: false, addEventListener() {} };
+  const window = {
+    WebSocket: Socket,
+    addEventListener(type, fn) {
+      if (!handlers.has(type)) handlers.set(type, []);
+      handlers.get(type).push(fn);
+    }
+  };
+  const document = {
+    body: null, hidden: false, addEventListener() {},
+    querySelector(selector) {
+      return withCanvas && selector === 'canvas' ? canvas : null;
+    }
+  };
   const context = {
     window, document, localStorage, sessionStorage,
     WebSocket: Socket,
     performance: { now: () => 0 },
     crypto: { randomUUID: () => 'test-request' },
     navigator: { onLine: true },
-    location: { reload() {} },
+    location: { reload() { reloadCount += 1; } },
+    Date: FakeDate,
+    PointerEvent: FakeMouseEvent,
+    MouseEvent: FakeMouseEvent,
     AbortController,
     setTimeout: (fn, ms) => { tasks.push({ fn, ms }); return tasks.length; },
     clearTimeout() {},
@@ -81,7 +105,18 @@ function createHarness() {
   watch.fn();
 
   return {
-    api, window, ws, sendPatch, tasks, localStorage, sessionStorage,
+    api, window, ws, sendPatch, tasks, localStorage, sessionStorage, events, context,
+    advanceTime(ms) { now += ms; },
+    getReloads() { return reloadCount; },
+    runWatchdog() {
+      const task = tasks.find(t => t.ms === 10000);
+      assert.ok(task, 'watchdog interval installed');
+      task.fn();
+    },
+    runGameObserver() { watch.fn(); },
+    realInput(type = 'pointermove') {
+      for (const handler of handlers.get(type) || []) handler({ isTrusted: true });
+    },
     receiveOwnState(tiles, inventory = { items: [], favoritedItemIds: [] }) {
       sendPatch([], {
         data: { players: [] },
@@ -173,4 +208,131 @@ test('reconnect clears stale garden until fresh own-player patches arrive', asyn
   h.window.MagicCircle_RoomConnection.currentWebSocket = next;
   assert.equal(h.api.getDiagnostics().snapshotAvailable, false);
   assert.equal(h.api.getDiagnostics().nativeSequenceReady, false);
+});
+
+
+test('Anti-AFK is opt-in; independent watchdog sends synthetic movement only after inactivity', async () => {
+  const h = createHarness({ withCanvas: true });
+  h.receiveOwnState({});
+  h.api.start();
+  await flush();
+  assert.equal(h.api.prefs.antiAfk, false);
+  h.advanceTime(60000);
+  h.runWatchdog();
+  assert.equal(h.api.state.antiAfkTicks, 0);
+  h.api.prefs.antiAfk = true;
+  h.realInput();
+  h.advanceTime(44000);
+  h.runWatchdog();
+  assert.equal(h.api.state.antiAfkTicks, 0);
+  h.advanceTime(2000);
+  h.runWatchdog();
+  assert.equal(h.api.state.antiAfkTicks, 1);
+  assert.deepEqual(h.events.map(e => e.type), ['pointermove', 'mousemove']);
+  assert.ok(h.events.every(e => e.isTrusted === false));
+  assert.match(h.api.state.antiAfkStatus, /unbestaetigt/);
+  h.advanceTime(30000);
+  h.runWatchdog();
+  assert.equal(h.api.state.antiAfkTicks, 1, 'no event spam');
+  h.advanceTime(21000);
+  h.runWatchdog();
+  assert.equal(h.api.state.antiAfkTicks, 2);
+  h.realInput();
+  h.advanceTime(15000);
+  h.runWatchdog();
+  assert.equal(h.api.state.antiAfkTicks, 2, 'fresh actual user input suppresses a pulse');
+  h.api.stop();
+  h.advanceTime(60000);
+  h.runWatchdog();
+  assert.equal(h.api.state.antiAfkTicks, 2, 'stop blocks pulses');
+});
+
+test('Auto-Reload is opt-in, waits 90 seconds after disconnect, and triggers only once per page', async () => {
+  const h = createHarness();
+  h.receiveOwnState({});
+  h.api.prefs.autoReload = true;
+  h.api.start();
+  await flush();
+  assert.equal(h.api.state.connectedOnce, true);
+  h.ws.readyState = 3;
+  h.ws.emit('close', {});
+  h.advanceTime(89000);
+  h.runWatchdog();
+  assert.equal(h.getReloads(), 0);
+  h.advanceTime(2000);
+  h.runWatchdog();
+  assert.equal(h.getReloads(), 1);
+  assert.equal(h.sessionStorage.getItem('magic_garden_standalone_beta_should_resume'), '1');
+  assert.ok(Number(h.sessionStorage.getItem('magic_garden_standalone_beta_elapsed_ms')) > 0);
+  h.advanceTime(90000);
+  h.runWatchdog();
+  assert.equal(h.getReloads(), 1, 'no runaway reload');
+  assert.equal(h.api.getDiagnostics().autoReloadAttemptsLast15m, 1);
+  h.api.stop();
+});
+
+test('Auto-Reload is disabled by default and never triggers with real network offline', async () => {
+  const h = createHarness();
+  h.receiveOwnState({});
+  h.api.start();
+  await flush();
+  h.ws.readyState = 3;
+  h.ws.emit('close', {});
+  h.advanceTime(200000);
+  h.runWatchdog();
+  assert.equal(h.getReloads(), 0, 'disabled');
+  h.api.prefs.autoReload = true;
+  h.context.navigator.onLine = false;
+  h.runWatchdog();
+  assert.equal(h.getReloads(), 0, 'actual network offline');
+  h.api.stop();
+});
+
+test('Auto-Reload respects a 3-in-15-minutes budget', async () => {
+  const h = createHarness();
+  h.receiveOwnState({});
+  h.api.prefs.autoReload = true;
+  h.sessionStorage.setItem(
+    'magic_garden_standalone_beta_reload_history',
+    JSON.stringify([Date.now(), Date.now(), Date.now()])
+  );
+  h.api.start();
+  await flush();
+  h.ws.readyState = 3;
+  h.ws.emit('close', {});
+  h.advanceTime(91000);
+  h.runWatchdog();
+  assert.equal(h.getReloads(), 0);
+  assert.equal(h.api.state.reloadLimitReached, true);
+  h.api.stop();
+});
+
+test('healthy connection and quick native reconnect do not reload after several minutes', async () => {
+  const h = createHarness();
+  h.receiveOwnState({});
+  h.api.prefs.autoReload = true;
+  h.api.start();
+  await flush();
+  h.advanceTime(120000);
+  h.runWatchdog();
+  assert.equal(h.getReloads(), 0, 'healthy connection');
+  h.ws.readyState = 3;
+  h.ws.emit('close', {});
+  h.advanceTime(40000);
+  h.runWatchdog();
+  const next = new h.window.WebSocket('wss://magicgarden.gg/version/1497/api/rooms/reconnect');
+  h.window.MagicCircle_RoomConnection.currentWebSocket = next;
+  h.runGameObserver();
+  next.emit('message', {
+    type: 'Welcome', selfPlayerId: 'self-player', executedCommandSequence: 0
+  });
+  h.window.MagicCircle_RoomConnection.lastDistributedRoomPublication.executedCommandSequence = 0;
+  h.receiveOwnState({});
+  await flush();
+  h.runWatchdog();
+  assert.equal(h.api.getDiagnostics().snapshotAvailable, true);
+  h.advanceTime(160000);
+  h.runWatchdog();
+  assert.equal(h.getReloads(), 0, 'reconnected before threshold');
+  h.api.stop();
 });
