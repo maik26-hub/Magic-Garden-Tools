@@ -2,6 +2,8 @@
 // @name         Magic Garden AutoFarm Standalone (Beta)
 // @namespace    mg-autofarm-standalone-beta
 // @version      14.0.1
+// @updateURL    https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.standalone.user.js
+// @downloadURL  https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.standalone.user.js
 // @description  BETA V14.0.1: standalone farm, experimental AFK pulses, safe reconnect/reload recovery
 // @match        https://magicgarden.gg/*
 // @run-at       document-start
@@ -87,7 +89,7 @@
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
   const VERSION = "14.0.1";
-  const UPDATE_URL = "https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js";
+  const UPDATE_URL = "https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.standalone.user.js";
   const NUMBER_FIELDS = Object.freeze({
     sellThreshold: { min: 5, max: 200, step: 1 },
     sellIntervalMs: { min: 500, max: 30000, step: 500 },
