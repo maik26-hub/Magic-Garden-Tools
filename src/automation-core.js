@@ -224,6 +224,7 @@ function createAutomationCore(env) {
         const shops = c ? knownShops : observedShops;
         return {id, name: record?.name || c?.name || human(id), price:num(c?.coinPrice)?c.coinPrice:null,
           catalogReady:!!c, shops, owned:s?total(s,type,id,true):null,
+          inventoryCount:s?total(s,type,id,false):null,
           stock: shops.map(shopId=>{
             const sh=s?.game.shops?.[shopId], row=arr(sh?.inventory).find(i=>i?.itemType===type&&kindId(i)===id);
             const purchased=s?.own.shopPurchases?.[shopId];
@@ -233,8 +234,11 @@ function createAutomationCore(env) {
       }).sort((a,b)=>a.name.localeCompare(b.name,'de'));
     };
     const weatherIds = [...new Set([...Object.keys(weatherNames),...(s?[weather(s)]:[]),...arr(s?.game.weatherForecast).map(w=>w?.weatherId).filter(str)])];
+    const eggChoices=catalogList('Egg',catalogs.eggs);
     return {
-      seeds:catalogList('Seed',catalogs.plants), eggs:catalogList('Egg',catalogs.eggs),
+      seeds:catalogList('Seed',catalogs.plants), eggs:eggChoices,
+      eggFilterChoices:eggChoices.map(e=>({...e,
+        name:e.name+' · '+(e.inventoryCount??0)+' im Inventar'})),
       tools:catalogList('Tool',catalogs.tools), decor:catalogList('Decor',catalogs.decor),
       mutations:Object.entries(catalogs.mutations||{}).map(([id,m])=>({id,name:m.name||human(id)})).sort((a,b)=>a.name.localeCompare(b.name,'de')),
       weather:weatherIds.map(id=>({id,name:weatherNames[id]||human(id)})),
