@@ -1,10 +1,18 @@
-# Magic Garden AutoFarm — V15.2.2
+# Magic Garden AutoFarm — V15.2.3
 
 Eigenständiges Tampermonkey-Skript für Magic Garden. Inoffizielles Community-Projekt, nicht mit dem Spiel verbunden.
 
-## Aktualisieren
+## Aktualisieren: rote Version oben
 
-**Im bisherigen Menü: Update prüfen → Installieren → in Tampermonkey bestätigen → F5.**
+Ab **V15.2.3** entfällt die alte Seite **„Updates“** samt **„Update prüfen“**. Stattdessen prüft die AutoFarm beim Laden und alle 30 Minuten automatisch über **Tampermonkey** die offizielle GitHub-Hauptversion.
+
+- **Grüne/neutrale Versionsplakette im Kopfbereich:** Kein neuerer Release erkannt (oder bei Verbindungsfehler: Status nicht bestimmbar). Die Versionsplakette bleibt anklickbar.
+- **Rote Versionsplakette:** Ein neuerer Release wurde gefunden. Klicke die Version oben an, bestätige die Aktualisierung in Tampermonkey und lade die Spielseite neu.
+- Die Versionsplakette öffnet den bekannten GitHub-Installationspfad als `.user.js`, über den Tampermonkey Updates normalerweise übernimmt.
+
+**Einmaliger Übergang von V15.2.1/V15.2.2:** Diese bereits installierten Versionen kennen die neue rote Versionsplakette noch nicht. Wenn dort „Update-Check fehlgeschlagen“ erscheint, benutze **einmalig Tampermonkey → Dashboard → Nach Userscript-Updates suchen** (beziehungsweise das Updates-Menü der Erweiterung). Tampermonkey prüft die bereits gespeicherte `@updateURL` selbst; du brauchst weder den kaputten In-Game-Check noch einen zusätzlichen Userscript-Link. Wenn der Browser/die Erweiterung den Release nicht laden kann, hilft auch das neue UI nicht ohne Behebung der Netzwerk-/Berechtigungsprobleme.
+
+**Neue Berechtigung:** V15.2.3 nutzt `GM_xmlhttpRequest` und `unsafeWindow`; Tampermonkey darf für den Versionsabruf `raw.githubusercontent.com` kontaktieren. Das bestehende Spiel läuft weiterhin über seine eigenen nativen Verbindungen.
 
 Name, Namespace, bisherige Update-Adresse, Einstellungen und Feldfarben bleiben erhalten. Kein zweites Userscript, keine QPM-/Garden-Companion-Abhängigkeit.
 
