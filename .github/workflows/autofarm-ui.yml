@@ -1,0 +1,32 @@
+name: AutoFarm UI
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  chromium:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify deterministic bundle
+        run: |
+          node scripts/build.cjs
+          git diff --exit-code -- MagicGardenAutoFarm.user.js
+      - name: Install browser dependencies
+        run: |
+          python3 -m pip install playwright==1.57.0
+          python3 -m playwright install --with-deps chromium
+      - name: Test real DOM on an offline blank page
+        run: python3 tests/ui-browser.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: autofarm-ui-screenshots
+          path: test-results/
+          retention-days: 3
