@@ -137,7 +137,7 @@ function createAutomationCore(env) {
     // Reihenfolge folgt den echten Stapeln im Inventar; ausverkaufte Stapel
     // werden uebersprungen. Favorisierte Eier bleiben unangetastet.
     const egg=s.inventory.items.find(i=>
-      i?.itemType==='Egg'&&str(i.eggId)&&quantity(i)>0&&!nativeFavorite(s,i)&&
+      i?.itemType==='Egg'&&str(i.eggId)&&quantity(i)>0&&!nativeFavorite(s,i)&&!env.protected({},i)&&
       eggIsAllowed(i.eggId,config.eggPlaceMode,config.eggPlaceAllowed));
     if(!egg){
       reasons.eggs='Kein erlaubtes, verfügbares Ei im Inventar';return null;
