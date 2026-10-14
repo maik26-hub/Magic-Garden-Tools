@@ -4,10 +4,10 @@ const root=path.resolve(__dirname,'..');
 let src=fs.readFileSync(path.join(root,'src/core-v14.user.js'),'utf8');
 function replace(a,b,name){const parts=src.split(a);if(parts.length!==2)throw Error(`${name}: expected one anchor, got ${parts.length-1}`);src=parts[0]+b+parts[1];}
 function stripExports(file){return fs.readFileSync(path.join(root,'src',file),'utf8').replace(/^if \(typeof module[^\n]*$/m,'');}
-replace('// @version      14.0.3','// @version      15.2.0','metadata version');
-replace('const VERSION = "14.0.3"','const VERSION = "15.2.0"','runtime version');
-replace('// @description  V14.0.3: standalone auto-farm, direct V13 update, AFK watchdog and safe reconnect/reload recovery','// @description  V15.2: colored plant/egg field roles and catalog menus without manual IDs','description');
-replace('  "use strict";', '  "use strict";\n\n'+stripExports('automation-core.js')+'\n'+stripExports('choice-controls.js')+'\n'+stripExports('automation-ui.js')+'\n  let automation = null;\n  let automationUI = null;','inline modules');
+replace('// @version      14.0.3','// @version      15.2.1','metadata version');
+replace('const VERSION = "14.0.3"','const VERSION = "15.2.1"','runtime version');
+replace('// @description  V14.0.3: standalone auto-farm, direct V13 update, AFK watchdog and safe reconnect/reload recovery','// @description  V15.2.1: reliable live catalog discovery and Auto-Buy without daily budget or coin reserve','description');
+replace('  "use strict";', '  "use strict";\n\n'+stripExports('catalog-source.js')+'\n'+stripExports('automation-core.js')+'\n'+stripExports('choice-controls.js')+'\n'+stripExports('automation-ui.js')+'\n  let automation = null;\n  let automationUI = null;','inline modules');
 replace('    sequence: -1, frontier: -1, lastSnapshotAt: 0, observedSockets: 0',`    sequence: -1, frontier: -1, lastSnapshotAt: 0, observedSockets: 0,
     own: null, game: null, actor: null, heldId: '', generation: 0,
     welcomed: false, cancelPending: null, serverOffset: 0`,'bridge fields');
@@ -106,19 +106,17 @@ replace('  function stop() {\n    state.running = false;','  function stop() {\n
 replace('    if (!panel) return;\n    const status = panel.querySelector','    if (!panel) return;\n    automationUI?.refresh();\n    const status = panel.querySelector','UI refresh');
 src=src.replaceAll('🌱 Standalone BETA · Aktiv','🌱 AutoFarm V15 · Aktiv').replaceAll('🌱 Magic Garden Standalone BETA','🌱 Magic Garden V15');
 replace('    body.appendChild(toggles);','    body.appendChild(toggles);\n    automationUI = mountAutomationUI(body, automation, document);','panel mount');
-replace('  // ===== Konsole =====',`  // ===== Native Kataloge: ausschließlich ein bereits geladenes Spielmodul =====
-  async function loadNativeAutomationCatalogs() {
-    const entries = typeof performance.getEntriesByType === 'function' ? performance.getEntriesByType('resource') : [];
-    const candidates = entries.map(entry => entry.name).filter(name => {
-      try {
-        const url = new URL(name, location.href);
-        return url.origin === location.origin && /^\\/version\\/\\d+\\/assets\\/BakedRoundedRect-[A-Za-z0-9_-]+\\.js$/.test(url.pathname);
-      } catch { return false; }
-    });
-    const url = candidates[candidates.length - 1];
-    if (!url) throw new Error('Nativer Katalog noch nicht geladen');
-    return import(url);
-  }
+replace('  // ===== Konsole =====',`  // ===== Own-game catalogs: observe early, recover from bootstrap imports =====
+  const nativeCatalogSource = createNativeCatalogSource({
+    document, performance,
+    PerformanceObserver: typeof PerformanceObserver === 'function' ? PerformanceObserver : null,
+    pageURL: () => location.href,
+    release: () => document.querySelector?.('meta[name="magiccircle-release"]')?.content ||
+      window.MagicCircle_RoomConnection?.currentWebSocket?.url?.match(/\\/version\\/(\\d+)\\//)?.[1] || '',
+    fetch: (...args) => fetch(...args),
+    importModule: url => import(url)
+  });
+  async function loadNativeAutomationCatalogs() { return nativeCatalogSource.load(); }
   automation = createAutomationCore({
     storage: localStorage,
     now: () => Date.now(),
@@ -132,6 +130,8 @@ replace('  // ===== Konsole =====',`  // ===== Native Kataloge: ausschließlich 
         heldId:bridge.heldId,selected:[...selectedSlots()].sort((a,b)=>a-b)};
     },
     loadCatalogs: loadNativeAutomationCatalogs,
+    catalogDiagnostics: () => nativeCatalogSource.diagnostics(),
+    onCatalogsChanged: () => automationUI?.refresh(),
     withPurchaseLock: (actor, fn) => typeof navigator.locks?.request === 'function'
       ? navigator.locks.request('magic-garden-autofarm-purchases',{ifAvailable:true}, lock => lock ? fn() : false)
       : Promise.resolve(false)
@@ -141,9 +141,9 @@ replace('  // ===== Konsole =====',`  // ===== Native Kataloge: ausschließlich 
   // ===== Konsole =====`,'init engine');
 replace('    state, cfg, prefs, start, stop, resetTimer, resetSession, selectedSlots, getDiagnostics, checkForUpdate, setNumberPreference,','    state, cfg, prefs, start, stop, resetTimer, resetSession, selectedSlots, getDiagnostics, checkForUpdate, setNumberPreference, automation,','public API');
 replace('      runtimeSeconds: Math.floor(runtimeMs() / 1000)','      runtimeSeconds: Math.floor(runtimeMs() / 1000),\n      automation: automation?.status() || null','diag');
-replace('console.log("✅ Magic Garden AutoFarm V14.0.3 geladen (keine QPM-/Companion-Abhaengigkeit).");','console.log("✅ Magic Garden AutoFarm V15.2.0 geladen (Automationszentrale, ohne Fremdskripte).");','boot');
+replace('console.log("✅ Magic Garden AutoFarm V14.0.3 geladen (keine QPM-/Companion-Abhaengigkeit).");','console.log("✅ Magic Garden AutoFarm V15.2.1 geladen (Automationszentrale, ohne Fremdskripte).");','boot');
 src = require('./compact-menu.cjs')(src, stripExports('compact-menu.js'));
 src = require('./field-plan.cjs')(src, stripExports('field-plan.js'));
 new vm.Script(src,{filename:'MagicGardenAutoFarm.user.js'});
 fs.writeFileSync(path.join(root,'MagicGardenAutoFarm.user.js'),src);
-console.log('Built V15.2.0:',Buffer.byteLength(src),'bytes');
+console.log('Built V15.2.1:',Buffer.byteLength(src),'bytes');

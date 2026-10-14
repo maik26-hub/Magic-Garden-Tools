@@ -70,7 +70,7 @@ with sync_playwright() as p:
  page.get_by_label('Maximal pro Restock').fill('2');page.get_by_label('Gewünschter Gesamtbestand').fill('42');page.get_by_role('button',name='Kaufregel speichern').click()
  rule=page.evaluate('MGAutoFarmV13.automation.getConfig().buyRules[0]')
  ok('catalog purchase selection becomes a bounded rule with native payload values',rule=={'type':'Seed','id':'BurrosTail','shop':'seed','maxPrice':500,'perRestock':2,'maxOwned':42})
- ok('saving a shop rule neither enables buy nor changes budget',page.evaluate('!MGAutoFarmV13.automation.getConfig().buy && MGAutoFarmV13.automation.getConfig().dailyBudget===0'))
+ ok('saving a shop rule leaves buy disabled and no day budget remains',page.evaluate("!MGAutoFarmV13.automation.getConfig().buy && !('dailyBudget' in MGAutoFarmV13.automation.getConfig())"))
  page.get_by_label('Was kaufen?').select_option(label='Eier');page.get_by_label('Artikel auswählen').select_option(label='Common Egg · 100 Coins');page.get_by_role('button',name='Kaufregel speichern').click()
  ok('egg purchases use the same menu, with correct egg shop/type',page.evaluate('MGAutoFarmV13.automation.getConfig().buyRules[1].type')=='Egg' and page.get_by_label('In diesem Shop').input_value()=='egg')
  page.locator('.mg-buy-rule').first.get_by_role('button',name='Bearbeiten').click();page.get_by_label('Gewünschter Gesamtbestand').fill('24');page.get_by_role('button',name='Kaufregel speichern').click()
