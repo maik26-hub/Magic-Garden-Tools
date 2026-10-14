@@ -13,6 +13,9 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
+      - name: Capture public catalog when absent
+        run: |
+          if [ -f scripts/refresh-data.cjs ] && [ ! -f src/catalog-data.json ]; then node scripts/refresh-data.cjs; fi
       - name: Build if modular sources are present
         run: |
           if [ -f scripts/build.cjs ]; then node scripts/build.cjs; fi
