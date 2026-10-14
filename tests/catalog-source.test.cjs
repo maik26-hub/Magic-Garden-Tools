@@ -85,10 +85,10 @@ function ownCore(noCatalogs=true){
   return {core,snap,sent,advance:()=>{t+=3000;}};
 }
 test('owned eggs are selectable and placed on blue fields without waiting for prices',async()=>{
-  const h=ownCore();h.snap.fieldModes[4]='egg';await h.core.loadCatalogs();assert.equal(h.core.menuChoices().eggs[0].id,'OwnedNewEgg');assert.equal(h.core.menuChoices().eggs[0].price,null);h.core.configure({enabled:true,eggs:true,eggId:'OwnedNewEgg'});await h.core.step();assert.deepEqual(h.sent,[{type:'GrowEgg',slot:4,eggId:'OwnedNewEgg'}]);
+  const h=ownCore();h.snap.fieldModes[4]='egg';await h.core.loadCatalogs();assert.equal(h.core.menuChoices().eggs[0].id,'OwnedNewEgg');assert.equal(h.core.menuChoices().eggs[0].price,null);h.core.configure({enabled:true,eggs:true,eggPlaceMode:'selected',eggPlaceAllowed:['OwnedNewEgg']});await h.core.step();assert.deepEqual(h.sent,[{type:'GrowEgg',slot:4,eggId:'OwnedNewEgg'}]);
 });
 test('without catalog an egg selection does not invent eggs or touch grey plots',async()=>{
-  const h=ownCore();h.core.configure({enabled:true,eggs:true,eggId:'OwnedNewEgg'});await h.core.step();assert.equal(h.sent.length,0);h.snap.fieldModes[1]='egg';h.snap.inventory.items=[];await h.core.step();assert.equal(h.sent.length,0);
+  const h=ownCore();h.core.configure({enabled:true,eggs:true,eggPlaceMode:'selected',eggPlaceAllowed:['OwnedNewEgg']});await h.core.step();assert.equal(h.sent.length,0);h.snap.fieldModes[1]='egg';h.snap.inventory.items=[];await h.core.step();assert.equal(h.sent.length,0);
 });
 test('owned seed fallback works on green only and no catalog means no purchase price is guessed',async()=>{
   const h=ownCore();h.snap.fieldModes[4]='plant';h.snap.game.shops.seed={restockId:'a',deadlineMs:99999,inventory:[{itemType:'Seed',species:'OwnedNewSeed',initialStock:10}]};h.core.configure({enabled:true,buy:true,buyRules:[{type:'Seed',id:'OwnedNewSeed',shop:'seed',maxPrice:10,perRestock:1,maxOwned:50}]});await h.core.step();assert.equal(h.sent.length,0);h.core.configure({plant:true,seedSpecies:'OwnedNewSeed'});await h.core.step();assert.deepEqual(h.sent,[{type:'PlantSeed',slot:4,species:'OwnedNewSeed'}]);
