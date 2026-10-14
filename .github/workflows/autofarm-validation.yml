@@ -24,7 +24,8 @@ jobs:
           node --check src/automation-ui.js
           node --check src/field-plan.js
           node --check src/choice-controls.js
-          node --test tests/main-upgrade.test.cjs tests/automation.test.cjs tests/reservations.test.cjs tests/field-roles.test.cjs
+          node --check src/catalog-source.js
+          node --test tests/main-upgrade.test.cjs tests/automation.test.cjs tests/reservations.test.cjs tests/field-roles.test.cjs tests/catalog-source.test.cjs
       - name: Archive validated source and tests
         if: always()
         uses: actions/upload-artifact@v4
