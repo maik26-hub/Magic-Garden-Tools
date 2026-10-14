@@ -169,7 +169,11 @@ function createPetAdvisor() {
       if(better===undefined||better+0.000001<power)return false;
       if(better>power+0.000001)stronger=true;
     }
-    return stronger;
+    // An otherwise equal extra ability is a genuine portfolio advantage.
+    // Equal max-level duplicates beyond the three reserved team slots are
+    // also redundant, so they may be *reviewed* (never automatically sold).
+    if([...offered.keys()].some(key=>!wanted.has(key)))stronger=true;
+    return stronger || offered.size===wanted.size;
   }
   function portfolio(profiles,catalogs){
     const perGoal={},reserved=new Set(),bestRoles=new Map();
