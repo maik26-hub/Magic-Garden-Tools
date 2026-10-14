@@ -17,7 +17,7 @@ jobs:
         run: |
           if [ -f scripts/refresh-data.cjs ] && [ ! -f src/catalog-slim.json ]; then node scripts/refresh-data.cjs; fi
       - name: One-time detailed public protocol audit
-        if: github.event.head_commit.message == 'research: run detailed protocol audit'
+        if: contains(github.event.head_commit.message, 'run-detailed-protocol-audit')
         run: node scripts/probe-detail.cjs
       - name: Build if modular sources are present
         run: |
