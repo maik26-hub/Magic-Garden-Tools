@@ -1,4 +1,4 @@
-# Feldfarben und Auswahlmenüs — V15.2.1
+# Feldfarben und Auswahlmenüs — V15.2.2
 
 ## Wo soll der Bot arbeiten?
 
@@ -22,9 +22,13 @@ Bisher markierte V13–V15.1-Felder werden einmalig grün. Eierfelder müssen be
 
 Pflanzen, Eier, Wetter, Petteams und Artikel werden anhand ihrer Namen gewählt. Pflanzenarten zum Behalten, Mutationen und Wetterpausen bieten eine durchsuchbare Mehrfachauswahl. Das Suchfeld filtert Namen und erzeugt keine Befehlskennung.
 
-**Ab V15.2.1:** Die Menülisten kombinieren erkannte Spielkataloge mit tatsächlichen Inventar-/Shop-Artikeln. So sind eigene Eier und Samen bereits vor vollständigem Laden der Preisdaten auswählbar. Die tatsächlichen Kennungen kommen aus diesen Daten, nicht aus geratenen Standardlisten.
+**Ab V15.2.2:** Die Menülisten kombinieren erkannte Spielkataloge mit tatsächlichen Inventar-/Shop-Artikeln. So sind eigene Eier und Samen bereits vor vollständigem Laden der Preisdaten auswählbar. Die tatsächlichen Kennungen kommen aus diesen Daten, nicht aus geratenen Standardlisten.
 
-**Eier:** Blaue Felder → Pflanzen → Leere blaue Felder mit Eiern füllen → Eiertyp auswählen. Automationszentrale und AutoFarm müssen aktiv sein, Eier müssen vorhanden sein. Der Schalter kauft keine Eier.
+**Eier ab V15.2.2:** Blaue Felder → Pflanzen. **„Welche Eier platzieren?“** bietet „Alle verfügbaren Eier im Inventar“ oder „Nur ausgewählte Eiertypen“ (Mehrfachauswahl mit Suchfeld). Unabhängig davon kontrolliert **„Welche Eier ausbrüten?“**, ob alle reifen Eier oder nur bestimmte Eiertypen geöffnet werden dürfen. Der ausgewählte Modus wirkt nur, wenn der dazugehörige Platzieren-/Ausbrüten-Schalter sowie Automationszentrale und AutoFarm aktiviert sind. Eier werden nicht durch diesen Schalter gekauft. Favorisierte und gesperrte Eier bleiben beim Platzieren geschützt.
+
+Bei Bestandsfilter „alle“ arbeitet der Bot die erlaubten Eierstapel aus dem **Inventar** nacheinander ab; Lagereier werden nicht automatisch entnommen. Beim Ausbrüten berücksichtigen die Filter reife Eier **nur auf blauen Feldern**. Die Menüs enthalten auch Eiertypen, die bereits auf blauen Feldern liegen, selbst wenn der Spielkatalog noch nicht geladen ist. Ohne freigegebene Eiertypen bewirkt „Nur ausgewählte“ bewusst keine Aktion.
+
+**Migration V15.2.1 → V15.2.2:** Eine alte Einzelwahl `eggId` wird als exakte Platzierungs-Erlaubnis übernommen (nicht stillschweigend auf alle erweitern). Alte Ausbrütregeln waren „alle“ und bleiben zunächst so. Beide Filter werden separat gespeichert.
 
 **Einkauf:** Kategorie → Artikel → passender Shop → Preislimit, Zielbestand und Menge pro Restock → Kaufregel speichern. Unbekannte Preise werden als noch ladend gekennzeichnet; neue Käufe brauchen weiterhin bestätigte Coin-Preise. Ausverkaufte, bekannte Artikel lassen sich vormerken. Preisvorschläge überschreiben eigene Grenzen nicht bei jeder Aktualisierung.
 

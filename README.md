@@ -1,4 +1,4 @@
-# Magic Garden AutoFarm — V15.2.1
+# Magic Garden AutoFarm — V15.2.2
 
 Eigenständiges Tampermonkey-Skript für Magic Garden. Inoffizielles Community-Projekt, nicht mit dem Spiel verbunden.
 
@@ -9,6 +9,10 @@ Eigenständiges Tampermonkey-Skript für Magic Garden. Inoffizielles Community-P
 Name, Namespace, bisherige Update-Adresse, Einstellungen und Feldfarben bleiben erhalten. Kein zweites Userscript, keine QPM-/Garden-Companion-Abhängigkeit.
 
 Neue Nutzer: [AutoFarm installieren](https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js).
+
+## V15.2.2: Eier nach Typ filtern
+
+Platzieren und Ausbrüten besitzen jetzt **unabhängige Eiertyp-Filter** mit „Alle“ oder „Nur ausgewählte“ und Live-Bestandsanzeige. Siehe die Eier-Anleitung unten.
 
 ## V15.2.1: Kataloge und Auto-Buy repariert
 
@@ -33,7 +37,11 @@ In **Felder** eine Farbe auswählen und klicken oder mit gedrückter Maus über 
 
 Die jeweiligen Automationsschalter müssen zusätzlich eingeschaltet sein. Bestehende Pflanzen werden nicht entfernt, um Platz für Eier zu machen. Eine bereits gesendete Aktion lässt sich durch Umfärben nicht rückgängig machen. Die alte Angabe „Letzte Auswahlfelder für Eier“ ist entfernt.
 
-**Eier nachlegen:** Blaue Felder markieren → Pflanzen → „Leere blaue Felder mit Eiern füllen“ aktivieren → vorhandenen Eiertyp wählen → Automationszentrale aktivieren und Start drücken. Eier müssen vorhanden sein; der Schalter selbst kauft nichts.
+**Eier platzieren:** Blaue Felder markieren → Pflanzen → „Leere blaue Felder mit Eiern füllen“ einschalten. Unter **„Welche Eier platzieren?“** zwischen **„Alle verfügbaren Eier im Inventar“** und **„Nur ausgewählte Eiertypen“** wählen. In der zweiten Einstellung lassen sich mehrere Eier über ein durchsuchbares Häkchen-Menü erlauben. Der Bot nimmt die erlaubten Eierstapel nacheinander aus deinem Inventar; favorisierte und geschützte Eier bleiben unangetastet. Er kauft hier nichts automatisch.
+
+**Eier ausbrüten:** Unabhängig davon unter **„Welche Eier ausbrüten?“** entweder alle reifen Eier auf blauen Feldern erlauben oder gezielt mehrere Eiertypen freigeben. Wer zum Beispiel seltene Eier aufbewahren will, wählt diese beim Öffnen einfach nicht aus.
+
+**Update-Sicherheit:** Eine bisherige Einzelwahl (z. B. Common Egg) wird beim Update auf **„Nur ausgewählte Eiertypen“** übertragen, nicht ungefragt auf alle Eier erweitert. Die vorherige Einstellung „alle reifen Eier ausbrüten“ bleibt erhalten. Beide Filter funktionieren ohne geladenen Preiskatalog, wenn die Eier im Inventar oder Garten bekannt sind.
 
 ## Bedienung und Kaufregeln
 

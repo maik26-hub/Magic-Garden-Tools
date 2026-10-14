@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         Magic Garden AutoFarm
 // @namespace    mg-autofarm-local
-// @version      15.2.1
+// @version      15.2.2
 // @updateURL   https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js
 // @downloadURL https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js
-// @description  V15.2.1: reliable live catalog discovery and Auto-Buy without daily budget or coin reserve
+// @description  V15.2.2: all-inventory egg placement, independent hatch/place filters and safe migration
 // @match        https://magicgarden.gg/*
 // @run-at       document-start
 // @grant        none
@@ -231,7 +231,7 @@ function createAutomationCore(env) {
   'use strict';
   const KEY='magic_garden_automation_v15', LEDGER='magic_garden_purchase_budget_v15', RECEIPTS='magic_garden_action_receipts_v15';
   const names={favorite:'Wertschutz / Favoriten',journal:'Journal',feed:'Pets füttern',trough:'Futtertrog',claims:'Quest-Belohnungen',hatch:'Eier ausbrüten',plant:'Nachpflanzen',eggs:'Eier nachlegen',water:'Gießen',storage:'Lager',teams:'Wetter-Petteams',buy:'Shop-Einkauf'};
-  const defaults={enabled:false,favorite:false,journal:false,feed:false,trough:false,claims:false,hatch:false,plant:false,eggs:false,water:false,storage:false,teams:false,buy:false,seedSpecies:'',eggId:'',hungerPercent:30,foodMaxValue:1000,troughItems:5,toolReserve:2,waterMinSeconds:600,keepValue:0,keepSpecies:[],minHarvestSize:0,minHarvestValue:0,wantedMutations:[],pauseWeather:[],buyRules:[],teamRules:[],actionIntervalMs:900};
+  const defaults={enabled:false,favorite:false,journal:false,feed:false,trough:false,claims:false,hatch:false,plant:false,eggs:false,water:false,storage:false,teams:false,buy:false,seedSpecies:'',eggPlaceMode:'all',eggPlaceAllowed:[],eggHatchMode:'all',eggHatchAllowed:[],hungerPercent:30,foodMaxValue:1000,troughItems:5,toolReserve:2,waterMinSeconds:600,keepValue:0,keepSpecies:[],minHarvestSize:0,minHarvestValue:0,wantedMutations:[],pauseWeather:[],buyRules:[],teamRules:[],actionIntervalMs:900};
   const arr=v=>Array.isArray(v)?v:[],num=v=>typeof v==='number'&&Number.isFinite(v),str=v=>typeof v==='string'&&v.length>0&&v.length<120,obj=v=>v&&typeof v==='object'&&!Array.isArray(v);
   const cleanList=v=>[...new Set(arr(v).filter(str))].slice(0,40);
   const bounded=(v,f,min,max)=>num(v)?Math.min(max,Math.max(min,Math.round(v))):f;
@@ -240,7 +240,22 @@ function createAutomationCore(env) {
   function normalize(input){
     const v=obj(input)?input:{},out={...defaults};
     for(const key of ['enabled',...Object.keys(names)])out[key]=v[key]===true;
-    for(const key of ['seedSpecies','eggId'])out[key]=str(v[key])?v[key]:'';
+    out.seedSpecies=str(v.seedSpecies)?v.seedSpecies:'';
+    // Migration: V15.2.1 hatte genau einen gewaehlen Eiertyp. Dessen
+    // Erlaubnis darf beim Update nicht ungefragt auf ALLE Eier erweitert werden.
+    // Frische Nutzer koennen dagegen direkt "Alle Eier im Inventar" waehlen.
+    const legacyEgg = str(v.eggId) ? v.eggId : '';
+    const hadLegacyEggSetting = Object.hasOwn(v,'eggId');
+    out.eggPlaceMode = v.eggPlaceMode === 'selected' ? 'selected'
+      : v.eggPlaceMode === 'all' ? 'all'
+      : hadLegacyEggSetting ? 'selected' : 'all';
+    out.eggPlaceAllowed = cleanList(
+      Array.isArray(v.eggPlaceAllowed) ? v.eggPlaceAllowed
+        : legacyEgg ? [legacyEgg] : []
+    );
+    // Bisher oeffnete der Bot alle reifen Eier auf blauen Feldern.
+    out.eggHatchMode = v.eggHatchMode === 'selected' ? 'selected' : 'all';
+    out.eggHatchAllowed = cleanList(v.eggHatchAllowed);
     for(const key of ['keepSpecies','wantedMutations','pauseWeather'])out[key]=cleanList(v[key]);
     const ranges={hungerPercent:[1,90],foodMaxValue:[1,1e9],troughItems:[0,50],toolReserve:[0,99],waterMinSeconds:[30,86400],keepValue:[0,1e12],minHarvestSize:[0,100],minHarvestValue:[0,1e12],actionIntervalMs:[500,10000]};
     for(const [key,limits]of Object.entries(ranges))out[key]=bounded(v[key],defaults[key],...limits);
@@ -319,11 +334,47 @@ function createAutomationCore(env) {
   function storageFor(s,id){return arr(s.inventory.storages).find(st=>st?.decorId===id&&Array.isArray(st.items));}
   function planTrough(s){const st=storageFor(s,'FeedingTrough');if(!st||!num(st.capacitySlots)){reasons.trough='Futtertrog / Kapazität fehlt';return null;}if(st.items.length>=Math.min(st.capacitySlots,config.troughItems))return null;const diets=arr(s.own.petSlots).flatMap(p=>arr(catalogs.pets?.[p?.petSpecies]?.diet)),i=sortedFood(s).find(i=>diets.includes(i.species));if(!i)return null;return job('trough','trough:'+i.id,String(st.items.length),{type:'MoveItem',from:'inventory',to:'FeedingTrough',itemId:i.id,quantity:1},n=>!n.inventory.items.some(x=>x?.id===i.id),2000);}
   function planClaims(s){const d=s.own.dailyQuests;if(!obj(d)||!str(d.dayUTC)||!Array.isArray(d.quests)){reasons.claims='Noch keine Tagesquest-Daten';return null;}for(const q of d.quests)if(str(q?.instanceId)&&num(q.completedAt)&&q.claimedAt===null)return job('claims','quest:'+q.instanceId,d.dayUTC,{type:'ClaimDailyQuestReward',instanceId:q.instanceId,acceptPartial:false},n=>num(n.own.dailyQuests?.quests?.find(x=>x.instanceId===q.instanceId)?.claimedAt),2000);if(d.quests.length&&d.bonusClaimedAt===null&&d.quests.every(q=>num(q.completedAt)&&num(q.claimedAt)))return job('claims','questbonus:'+d.dayUTC,d.dayUTC,{type:'ClaimDailyQuestBonus',acceptPartial:false},n=>num(n.own.dailyQuests?.bonusClaimedAt),2000);return null;}
-  function planHatch(s){if(s.inventory.items.length>=98){reasons.hatch='Mindestens zwei freie Inventarplätze benötigt';return null;}for(const tile of plots(s,'egg')){const e=s.garden[tile];if(e?.objectType==='egg'&&num(e.maturedAt)&&e.maturedAt<=s.serverNow)return job('hatch','hatch:'+tile,e.eggId+':'+e.plantedAt,{type:'HatchEgg',slot:tile},n=>n.garden[tile]?.objectType!=='egg'||n.garden[tile]?.plantedAt!==e.plantedAt,5000);}return null;}
+  function eggIsAllowed(id,mode,allowed) {
+    return mode === 'all' || (str(id) && allowed.includes(id));
+  }
+  function planHatch(s){
+    if(s.inventory.items.length>=98){reasons.hatch='Mindestens zwei freie Inventarplätze benötigt';return null;}
+    if(config.eggHatchMode==='selected'&&!config.eggHatchAllowed.length){
+      reasons.hatch='Keine Eier zum Ausbrüten ausgewählt';return null;
+    }
+    for(const tile of plots(s,'egg')){
+      const e=s.garden[tile];
+      if(e?.objectType!=='egg'||!num(e.maturedAt)||e.maturedAt>s.serverNow)continue;
+      if(!eggIsAllowed(e.eggId,config.eggHatchMode,config.eggHatchAllowed))continue;
+      return job('hatch','hatch:'+tile,e.eggId+':'+e.plantedAt,
+        {type:'HatchEgg',slot:tile},
+        n=>n.garden[tile]?.objectType!=='egg'||n.garden[tile]?.plantedAt!==e.plantedAt,5000);
+    }
+    return null;
+  }
   function getStack(s,type,id){return s.inventory.items.find(i=>i?.itemType===type&&kindId(i)===id&&quantity(i)>0&&!nativeFavorite(s,i));}
   function retrieveStack(s,type,id,reserve=0){if(s.inventory.items.length>=99)return null;const storageId={Seed:'SeedSilo',Tool:'ToolShack'}[type],st=storageFor(s,storageId),i=arr(st?.items).find(i=>i?.itemType===type&&kindId(i)===id&&quantity(i)>reserve&&!nativeFavorite(s,i));return i?{item:i,storageId,qty:1}:null;}
   function planPlant(s){const species=config.seedSpecies;if(!species){reasons.plant='Saatgut auswählen';return null;}const tile=plots(s,'plant').find(t=>s.garden[t]==null);if(tile===undefined)return null;const seed=getStack(s,'Seed',species);if(!seed){const st=retrieveStack(s,'Seed',species);if(!st){reasons.plant='Kein freigegebenes Saatgut';return null;}return job('plant','retrieve:seed:'+species,String(quantity(st.item)),{type:'MoveItem',from:st.storageId,to:'inventory',itemId:itemKey(st.item),quantity:1},n=>total(n,'Seed',species)>0,2000);}return job('plant','plant:'+tile,species+':'+quantity(seed),{type:'PlantSeed',slot:tile,species},n=>n.garden[tile]?.objectType==='plant',2500);}
-  function planEggs(s){const id=config.eggId;if(!id){reasons.eggs='Ei auswählen';return null;}const tile=plots(s,'egg').find(t=>s.garden[t]==null);if(tile===undefined)return null;const e=getStack(s,'Egg',id);if(!e){reasons.eggs='Kein freigegebenes Ei';return null;}return job('eggs','growegg:'+tile,id+':'+quantity(e),{type:'GrowEgg',slot:tile,eggId:id},n=>n.garden[tile]?.objectType==='egg',3000);}
+  function planEggs(s){
+    const tile=plots(s,'egg').find(t=>s.garden[t]==null);
+    if(tile===undefined)return null;
+    if(config.eggPlaceMode==='selected'&&!config.eggPlaceAllowed.length){
+      reasons.eggs='Keine Eier zum Platzieren ausgewählt';return null;
+    }
+    // Alle berechtigten Eiertypen DIREKT aus dem Inventar verwenden. Die
+    // Reihenfolge folgt den echten Stapeln im Inventar; ausverkaufte Stapel
+    // werden uebersprungen. Favorisierte Eier bleiben unangetastet.
+    const egg=s.inventory.items.find(i=>
+      i?.itemType==='Egg'&&str(i.eggId)&&quantity(i)>0&&!nativeFavorite(s,i)&&!env.protected({},i)&&
+      eggIsAllowed(i.eggId,config.eggPlaceMode,config.eggPlaceAllowed));
+    if(!egg){
+      reasons.eggs='Kein erlaubtes, verfügbares Ei im Inventar';return null;
+    }
+    const id=egg.eggId;
+    return job('eggs','growegg:'+tile,id+':'+quantity(egg),
+      {type:'GrowEgg',slot:tile,eggId:id},
+      n=>n.garden[tile]?.objectType==='egg',3000);
+  }
   function planWater(s){const can=getStack(s,'Tool','WateringCan');if(!can||quantity(can)<=config.toolReserve){reasons.water='Gießkannen-Reserve erreicht';return null;}for(const tile of plots(s,'plant')){const p=s.garden[tile];if(p?.objectType!=='plant'||arr(p.slots).some(c=>env.protected(p,c)))continue;const times=arr(p.slots).map(c=>c.endTime).filter(num);if(!times.length||Math.min(...times)-s.serverNow<config.waterMinSeconds*1000)continue;return job('water','water:'+tile,String(p.plantedAt),{type:'WaterPlant',slot:tile},n=>total(n,'Tool','WateringCan')<quantity(can),300000);}return null;}
   function planStorage(s){for(const i of s.inventory.items){const type=i?.itemType,id=kindId(i),key=itemKey(i),to={Seed:'SeedSilo',Tool:'ToolShack',Decor:'DecorShed'}[type];if(!to||!str(key)||nativeFavorite(s,i)||i.remainingActiveSeconds>0)continue;if(type==='Seed'&&config.plant&&id===config.seedSpecies)continue;if(type==='Tool'&&['Camera','WateringCan'].includes(id))continue;if(s.heldId===key)continue;const st=storageFor(s,to),same=arr(st?.items).find(x=>x?.itemType===type&&itemKey(x)===key);if(!same||quantity(i)<=0)continue;const limit=catalogFor(type,id)?.maxInventoryQuantity,qty=num(limit)?Math.min(quantity(i),Math.max(0,limit-quantity(same))):quantity(i);if(qty<=0)continue;return job('storage','store:'+key,quantity(i)+':'+quantity(same),{type:'MoveItem',from:'inventory',to,itemId:key,quantity:qty},n=>total(n,type,id)<total(s,type,id),3000);}return null;}
   function planTeams(s){const r=config.teamRules.find(r=>r.weather===weather(s));if(!r){reasons.teams='Keine Regel für aktuelles Wetter';return null;}const team=arr(s.own.petTeams).find(t=>t?.id===r.teamId),ids=arr(team?.members).map(m=>m.petId).filter(str).sort();if(!team||!ids.length)return null;const active=arr(s.own.petSlots).map(p=>p.id).filter(str).sort();if(JSON.stringify(ids)===JSON.stringify(active))return null;if(s.inventory.items.length>=95){reasons.teams='Inventar zu voll für Teamwechsel';return null;}return job('teams','team:'+r.teamId,weather(s)+':'+active.join(','),{type:'ApplyPetTeam',teamId:r.teamId},n=>JSON.stringify(arr(n.own.petSlots).map(p=>p.id).sort())===JSON.stringify(ids),60000);}
@@ -386,7 +437,11 @@ function createAutomationCore(env) {
       const entries = new Map(Object.entries(source || {}));
       const inventory = s ? [...s.inventory.items, ...arr(s.inventory.storages).flatMap(st=>arr(st.items))] : [];
       const shopItems = s ? Object.values(s.game.shops||{}).flatMap(sh=>arr(sh?.inventory)) : [];
-      for (const item of [...inventory,...shopItems]) {
+      const placedEggs = type === 'Egg' && s
+        ? Object.values(s.garden||{}).filter(tile=>tile?.objectType==='egg')
+          .map(tile=>({itemType:'Egg',eggId:tile.eggId}))
+        : [];
+      for (const item of [...inventory,...shopItems,...placedEggs]) {
         const id=kindId(item||{});
         if(item?.itemType===type && str(id) && !entries.has(id)) entries.set(id,null);
       }
@@ -397,6 +452,7 @@ function createAutomationCore(env) {
         const shops = c ? knownShops : observedShops;
         return {id, name: record?.name || c?.name || human(id), price:num(c?.coinPrice)?c.coinPrice:null,
           catalogReady:!!c, shops, owned:s?total(s,type,id,true):null,
+          inventoryCount:s?total(s,type,id,false):null,
           stock: shops.map(shopId=>{
             const sh=s?.game.shops?.[shopId], row=arr(sh?.inventory).find(i=>i?.itemType===type&&kindId(i)===id);
             const purchased=s?.own.shopPurchases?.[shopId];
@@ -406,8 +462,11 @@ function createAutomationCore(env) {
       }).sort((a,b)=>a.name.localeCompare(b.name,'de'));
     };
     const weatherIds = [...new Set([...Object.keys(weatherNames),...(s?[weather(s)]:[]),...arr(s?.game.weatherForecast).map(w=>w?.weatherId).filter(str)])];
+    const eggChoices=catalogList('Egg',catalogs.eggs);
     return {
-      seeds:catalogList('Seed',catalogs.plants), eggs:catalogList('Egg',catalogs.eggs),
+      seeds:catalogList('Seed',catalogs.plants), eggs:eggChoices,
+      eggFilterChoices:eggChoices.map(e=>({...e,
+        name:e.name+' · '+(e.inventoryCount??0)+' im Inventar'})),
       tools:catalogList('Tool',catalogs.tools), decor:catalogList('Decor',catalogs.decor),
       mutations:Object.entries(catalogs.mutations||{}).map(([id,m])=>({id,name:m.name||human(id)})).sort((a,b)=>a.name.localeCompare(b.name,'de')),
       weather:weatherIds.map(id=>({id,name:weatherNames[id]||human(id)})),
@@ -508,6 +567,16 @@ function mountAutomationUI(parent, engine, document) {
   function section(label){const d=document.createElement('details'),s=document.createElement('summary');d.open=true;d.className='mg-auto-section';s.textContent=label;s.style.cursor='pointer';d.appendChild(s);d.style.cssText='margin:10px 0;padding:8px 0;border-top:1px solid #355342';root.appendChild(d);return d;}
   function button(text,fn,where=root){const b=document.createElement('button');b.type='button';b.textContent=text;b.style.cssText=style+';cursor:pointer;margin:4px 4px 4px 0';b.addEventListener('click',fn);where.appendChild(b);return b;}
   function select(label,key,choiceKey,where=root){const input=document.createElement('select');input.style.cssText=style;row(label,input,where).classList.add('mg-wide-choice');input.dataset.mgSetting=key;selectors.push({input,key,choiceKey});input.addEventListener('change',()=>save({[key]:input.value}));return input;}
+  function eggModeSelect(label,key,options,where) {
+    const input=document.createElement('select');input.style.cssText=style;
+    input.dataset.mgSetting=key;
+    for(const [value,name] of options){const option=document.createElement('option');option.value=value;option.textContent=name;input.appendChild(option);}
+    input.value=config()[key];
+    input.addEventListener('change',()=>save({[key]:input.value}));
+    inputs.set(key,input);
+    row(label,input,where).classList.add('mg-wide-choice');
+    return input;
+  }
   function explain(text,where){const n=document.createElement('p');n.className='mg-choice-note';n.textContent=text;where.appendChild(n);return n;}
   check('Automationszentrale aktiv','enabled');
   button('Sicherer Autopilot',()=>save({enabled:true,favorite:true,claims:true,journal:true,feed:true,hatch:true,storage:true}));
@@ -516,10 +585,22 @@ function mountAutomationUI(parent, engine, document) {
   const farming=section('Pflanzen, Eier & Gießen');
   check('Leere grüne Felder bepflanzen','plant',farming);select('Saatgut','seedSpecies','seeds',farming);
   explain('Grün = Pflanzen. Nutzt vorhandene Samen; dieser Schalter kauft nichts.',farming);
-  check('Reife Eier auf blauen Feldern öffnen','hatch',farming);check('Leere blaue Felder mit Eiern füllen','eggs',farming);select('Ei','eggId','eggs',farming);
+  check('Reife Eier auf blauen Feldern öffnen','hatch',farming);
+  eggModeSelect('Welche Eier ausbrüten?','eggHatchMode',[
+    ['all','Alle reifen Eier auf blauen Feldern'],
+    ['selected','Nur ausgewählte Eiertypen']
+  ],farming);
+  const hatchFilter=pickers.multi(farming,'Eiertypen zum Ausbrüten','eggHatchAllowed','eggFilterChoices');
+  check('Leere blaue Felder mit Eiern füllen','eggs',farming);
+  eggModeSelect('Welche Eier platzieren?','eggPlaceMode',[
+    ['all','Alle verfügbaren Eier im Inventar'],
+    ['selected','Nur ausgewählte Eiertypen']
+  ],farming);
+  const placementFilter=pickers.multi(farming,'Eiertypen zum Platzieren','eggPlaceAllowed','eggFilterChoices');
+  explain('Platzieren und Ausbrüten haben eigene Filter. Blaue Felder aus „Felder“ verwenden. Favorisierte Eier werden nicht platziert.',farming);
   const fieldInfo=explain('Eierfelder in „Felder“ blau markieren. Grau wird ignoriert.',farming);
   check('Pflanzen auf grünen Feldern gießen','water',farming);number('Nur gießen ab Restzeit (Sek.)','waterMinSeconds',30,86400,farming);number('Gießkannen übrig lassen','toolReserve',0,99,farming);
-  dependent.push(['seedSpecies','plant'],['eggId','eggs'],['waterMinSeconds','water'],['toolReserve','water']);
+  dependent.push(['seedSpecies','plant'],['eggPlaceMode','eggs'],['eggHatchMode','hatch'],['waterMinSeconds','water'],['toolReserve','water']);
   const protection=section('Erntefilter & Wertschutz');
   check('Wertvolle Produkte favorisieren','favorite',protection);number('Favorisieren ab Basiswert (0 = aus)','keepValue',0,1e12,protection);
   list('Diese Pflanzenarten behalten','keepSpecies',protection);number('Ernten ab Größe (0 = alle)','minHarvestSize',0,100,protection);
@@ -581,6 +662,8 @@ function mountAutomationUI(parent, engine, document) {
     for(const [key,input]of inputs){if(document.activeElement===input)continue;if(input.type==='checkbox')input.checked=c[key];else input.value=Array.isArray(c[key])?c[key].join(', '):c[key];}
     for(const s of selectors)pickers.options(s.input,choices[s.choiceKey]||[],c[s.key]);
     for(const [key,toggle]of dependent){const item=inputs.get(key)||selectors.find(s=>s.key===key)?.input;if(item)item.closest('label').hidden=!c[toggle];}
+    hatchFilter.hidden=!c.hatch||c.eggHatchMode!=='selected';
+    placementFilter.hidden=!c.eggs||c.eggPlaceMode!=='selected';
     fieldInfo.textContent=choices.fields?`Felder: ${choices.fields.plant} grün für Pflanzen · ${choices.fields.egg} blau für Eier. Grau wird ignoriert.`:'Felder in „Felder“ grün oder blau markieren. Grau wird ignoriert.';
     pickers.refresh(choices);pickers.options(weatherInput,choices.weather,weatherInput.value,'Wetter wählen');pickers.options(teamSelect,choices.pets,teamSelect.value,'Team wählen');refreshBuy(choices);
     status.textContent='Kataloge: '+info.catalogs+'\nWetter: '+(choices.weather.find(w=>w.id===info.weather)?.name||info.weather)+'\nKäufe heute: '+info.spentToday.toLocaleString('de-DE')+' Coins'+'\n'+info.modules.filter(m=>m.on).map(m=>m.label+': '+m.confirmed+' · '+m.status).join('\n')+(info.sell?'\nVerkauf: '+info.sell:'');
@@ -1048,7 +1131,7 @@ function mountFieldGrid(container, plan, onChange) {
   }
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-  const VERSION = "15.2.1";
+  const VERSION = "15.2.2";
   const UPDATE_URL = "https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js";
   const NUMBER_FIELDS = Object.freeze({
     sellThreshold: { min: 5, max: 200, step: 1 },
@@ -2456,5 +2539,5 @@ function mountFieldGrid(container, plan, onChange) {
   if (readValue(sessionStorage, KEYS.resume) === "1") {
     start({ auto: true });
   }
-  console.log("✅ Magic Garden AutoFarm V15.2.1 geladen (Automationszentrale, ohne Fremdskripte).");
+  console.log("✅ Magic Garden AutoFarm V15.2.2 geladen (Automationszentrale, ohne Fremdskripte).");
 })();
