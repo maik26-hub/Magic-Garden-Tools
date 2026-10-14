@@ -39,8 +39,8 @@ jobs:
                   except Exception as e: continue
                   total+=len(text); name=pathlib.Path(urllib.parse.urlparse(url).path).name
                   (out/name).write_text(text); manifest.append({'file':name,'url':actual})
-                  for p in re.findall(r'[\"\']((?:\./|/assets/)[^\"\']+\.js)[\"\']',text):
-                      nexturl=urllib.parse.urljoin(url,p)
+                  for p in re.findall(r'[\"\'`]((?:\./|/assets/|assets/)[^\"\'`]+\.js)[\"\'`]',text):
+                      nexturl=urllib.parse.urljoin(url,'../'+p if p.startswith('assets/') else p)
                       if nexturl not in seen:urls.append(nexturl)
               (out/'manifest.json').write_text(json.dumps(manifest,indent=2))
               print('Public assets:',len(manifest),'bytes:',total)
