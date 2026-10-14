@@ -1,0 +1,54 @@
+name: Public protocol fixtures
+on:
+  push:
+    branches: [feature/v15-automation-engine]
+    paths: [.github/workflows/autofarm-research.yml]
+permissions:
+  contents: read
+jobs:
+  fixtures:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Collect documented public sources (do not execute)
+        run: |
+          mkdir -p research
+          git clone --depth 1 https://github.com/Liam0306dis/garden-companion.git /tmp/companion
+          cp -r /tmp/companion/src research/companion-src
+          cp /tmp/companion/LICENSE research/COMPANION-LICENSE
+          git -C /tmp/companion rev-parse HEAD > research/COMPANION-COMMIT
+          python3 - <<'PY'
+          import urllib.request, urllib.parse, re, pathlib, json
+          out=pathlib.Path('research/game'); out.mkdir()
+          origin='https://magicgarden.gg/'
+          def get(url):
+              req=urllib.request.Request(url,headers={'User-Agent':'Mozilla/5.0'})
+              with urllib.request.urlopen(req,timeout=20) as r:
+                  return r.read(8_000_000).decode('utf-8','replace'),r.url
+          try:
+              page,base=get(origin)
+              (out/'index.html').write_text(page)
+              urls=[urllib.parse.urljoin(base,p) for p in re.findall(r'(?:src|href)=[\"\']([^\"\']+\.js(?:\?[^\"\']*)?)[\"\']',page)]
+              seen=set(); total=0; manifest=[]
+              while urls and len(seen)<100 and total<40_000_000:
+                  url=urls.pop(0)
+                  if url in seen or urllib.parse.urlparse(url).netloc!='magicgarden.gg':continue
+                  seen.add(url)
+                  try: text,actual=get(url)
+                  except Exception as e: continue
+                  total+=len(text); name=pathlib.Path(urllib.parse.urlparse(url).path).name
+                  (out/name).write_text(text); manifest.append({'file':name,'url':actual})
+                  for p in re.findall(r'[\"\']((?:\./|/assets/)[^\"\']+\.js)[\"\']',text):
+                      nexturl=urllib.parse.urljoin(url,p)
+                      if nexturl not in seen:urls.append(nexturl)
+              (out/'manifest.json').write_text(json.dumps(manifest,indent=2))
+              print('Public assets:',len(manifest),'bytes:',total)
+          except Exception as e:
+              (out/'fetch-error.txt').write_text(str(e))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: public-protocol-fixtures
+          path: research/
+          retention-days: 3
