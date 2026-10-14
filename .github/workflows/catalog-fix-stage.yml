@@ -1,0 +1,72 @@
+name: Catalog fix staging
+on:
+  push:
+    branches: [fix/v15.2.1-catalogs-autobuy]
+    paths: ['.github/workflows/catalog-fix-stage.yml']
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply source changes and verify exact locally tested bundle
+        run: |
+          python scripts/prepare-catalog-fix.py
+          node scripts/build.cjs
+          test "$(git hash-object MagicGardenAutoFarm.user.js)" = '3257e6b71d37c0a5350b69fc4b649936dcd85b47'
+          node --test tests/main-upgrade.test.cjs tests/automation.test.cjs tests/reservations.test.cjs tests/field-roles.test.cjs tests/catalog-source.test.cjs
+      - name: Install Chromium
+        run: |
+          python -m pip install playwright==1.57.0
+          python -m playwright install --with-deps chromium
+      - name: Actual bundled menus and catalog loader with offline game fixtures
+        run: |
+          export CHROMIUM_PATH="$(python -c 'from playwright.sync_api import sync_playwright; p=sync_playwright().start(); print(p.chromium.executable_path); p.stop()')"
+          python tests/browser/compact_menu.py
+          python tests/browser/field_choices.py
+          python tests/browser/catalog_recovery.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: catalog-fix-tested
+          path: |
+            MagicGardenAutoFarm.user.js
+            src/
+            scripts/build.cjs
+            tests/
+            test-output/
+          retention-days: 3
+  stage:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: catalog-fix-tested
+          path: /tmp/catalog-fix-tested
+      - name: Commit validated output only if feature head is unchanged
+        run: |
+          cp /tmp/catalog-fix-tested/MagicGardenAutoFarm.user.js MagicGardenAutoFarm.user.js
+          cp /tmp/catalog-fix-tested/scripts/build.cjs scripts/build.cjs
+          cp -r /tmp/catalog-fix-tested/src/. src/
+          cp -r /tmp/catalog-fix-tested/tests/. tests/
+          git add MagicGardenAutoFarm.user.js scripts/build.cjs src/ tests/
+          if git diff --cached --quiet; then exit 0; fi
+          git fetch origin fix/v15.2.1-catalogs-autobuy --no-tags
+          test "$(git rev-parse FETCH_HEAD)" = "$GITHUB_SHA"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'build: stage verified V15.2.1 catalog and Auto-Buy fix [skip ci]'
+          git push origin HEAD:refs/heads/fix/v15.2.1-catalogs-autobuy
