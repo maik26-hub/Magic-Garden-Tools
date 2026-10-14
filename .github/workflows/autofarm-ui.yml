@@ -31,6 +31,7 @@ jobs:
         run: |
           export CHROMIUM_PATH="$(python -c 'from playwright.sync_api import sync_playwright; p=sync_playwright().start(); print(p.chromium.executable_path); p.stop()')"
           python tests/browser/compact_menu.py
+          python tests/browser/field_choices.py
       - name: Save screenshots and assertion report
         if: always()
         uses: actions/upload-artifact@v4
