@@ -169,6 +169,75 @@ function mountAutomationUI(parent, engine, document) {
   }
   advisorGoal.addEventListener('change',()=>{lastPetSignature='';refreshPetAdvisor();});
 
+  // Opt-in Pet Auto-Sell. Only safely dominated *inventory* pets with a
+  // specifically allowed source egg are eligible. Never bulk-sell by rarity.
+  const petSellUI=document.createElement('details');petSellUI.className='mg-pet-autosell';petSellUI.open=true;
+  const petSellHead=document.createElement('summary');petSellHead.textContent='Pet Auto-Sell · sichere Duplikate';
+  petSellUI.appendChild(petSellHead);
+  check('Pet Auto-Sell einschalten','petSell',petSellUI);
+  const petSellEggFilter=pickers.multi(petSellUI,
+    'Nur Pets aus diesen Eiern verkaufen','petSellEggs','eggFilterChoices');
+  number('Maximal Pets pro Sitzung','petSellPerSession',1,20,petSellUI);
+  const petSellPreview=explain('Wird geladen …',petSellUI);
+  explain('Nur nachweisbar schwächere Pets mit abgedeckten Max-Level-Boosts. Aktive, gesperrte, favorisierte, mutierte, in Teams/Pet Hutch benutzte Pets und unbekannte Ei-Herkunft bleiben geschützt. Leere Eier-Auswahl = kein Verkauf. Keine automatischen Pet-Verkäufe ohne Aktivierung.',petSellUI);
+  pets.appendChild(petSellUI);
+
+  // Aries exposes saved teams through QWS_PetsService, but NOT the Team
+  // Builder's unsaved suggestions. Users must explicitly opt in a saved
+  // Aries team + goal. Our own local advisor supplies max-STR candidates.
+  const ariesUI=document.createElement('details');ariesUI.className='mg-aries-team-sync';
+  ariesUI.open=true;ariesUI.appendChild((()=>{const n=document.createElement('summary');n.textContent='Aries-Teams automatisch aktualisieren';return n;})());
+  check('Aries-Team-Sync einschalten','ariesSync',ariesUI);
+  const ariesTeamPick=document.createElement('select');ariesTeamPick.style.cssText=style;
+  row('Gespeichertes Aries-Team',ariesTeamPick,ariesUI).classList.add('mg-wide-choice');
+  const ariesGoalPick=document.createElement('select');ariesGoalPick.style.cssText=style;
+  row('Optimieren für',ariesGoalPick,ariesUI).classList.add('mg-wide-choice');
+  for(const goal of engine.petGoals||[]){
+    const option=document.createElement('option');option.value=goal.id;option.textContent=goal.name;
+    ariesGoalPick.appendChild(option);
+  }
+  const ariesManagedList=document.createElement('div');ariesUI.appendChild(ariesManagedList);
+  const ariesInfo=explain('Warte auf Arie’s Mod …',ariesUI);
+  button('Dieses Aries-Team verwalten',()=>{
+    if(!ariesTeamPick.value||!ariesGoalPick.value){alert.textContent='Team und Ziel auswählen';return;}
+    const rows=config().ariesManagedTeams.filter(t=>t.teamId!==ariesTeamPick.value);
+    save({ariesManagedTeams:[...rows,{teamId:ariesTeamPick.value,goal:ariesGoalPick.value}]});
+  },ariesUI);
+  explain('Aries muss installiert sein und seine Team-Synchronisierung aktiviert haben. Nur ausdrücklich registrierte gespeicherte Teams werden geändert. Unsere Max-STR-Bewertung wählt neue Mitglieder; Aries’ interne Team-Builder-Vorschläge sind derzeit nicht öffentlich zugänglich.',ariesUI);
+  pets.appendChild(ariesUI);
+  let lastAriesSig='';
+  function refreshPetAutomation(){
+    const c=config(),ariesTeams=engine.ariesTeams?.()||[];
+    const proposed=engine.petSellProposal?.();
+    petSellPreview.textContent=c.petSell
+      ? (proposed?.pet
+        ? 'Nächster sicherer Kandidat: '+(proposed.pet.name||proposed.pet.petSpecies)+
+          ' · Herkunft: '+proposed.pet.sourceEggId+
+          ' · '+proposed.why
+        : 'Verkauf wartet: '+(proposed?.why||'Spieldaten fehlen'))
+      : 'Pet Auto-Sell ist AUS. Nur die Vorschau ist aktiv.';
+    pickers.options(ariesTeamPick,
+      ariesTeams.map(t=>({id:t.id,name:t.name+(t.serverId?'':' · nicht mit Spiel synchronisiert')})),
+      ariesTeamPick.value,'Aries-Team wählen');
+    ariesInfo.textContent=ariesTeams.length
+      ? ariesTeams.length+' gespeicherte Aries-Teams erkannt. Nur Teams mit aktivem Spiel-Sync lassen sich automatisch aktualisieren.'
+      : 'Aries-Team-Service noch nicht gefunden. Installiere/aktiviere Arie’s Mod.';
+    const signature=JSON.stringify([c.ariesManagedTeams,ariesTeams]);
+    if(signature===lastAriesSig)return;
+    lastAriesSig=signature;ariesManagedList.replaceChildren();
+    for(const rule of c.ariesManagedTeams){
+      const card=document.createElement('div');card.className='mg-buy-rule';
+      const team=ariesTeams.find(t=>t.id===rule.teamId);
+      const goal=(engine.petGoals||[]).find(g=>g.id===rule.goal);
+      const label=document.createElement('p');
+      label.textContent=(team?.name||'Gespeichertes Aries-Team derzeit nicht verfügbar')+
+        ' → '+(goal?.name||rule.goal);
+      card.appendChild(label);
+      button('Verwaltung entfernen',()=>save({
+        ariesManagedTeams:config().ariesManagedTeams.filter(r=>r.teamId!==rule.teamId)
+      }),card);ariesManagedList.appendChild(card);
+    }
+  }
   const quests=section('Journal & tägliche Quests');check('Neue Journalvarianten fotografieren','journal',quests);check('Fertige Belohnungen abholen','claims',quests);
   const qnote=document.createElement('small');qnote.textContent='Camera benötigt. Questbelohnungen werden nicht teilweise verworfen. Quests werden nicht blind durch Einkäufe oder Umgraben erzwungen.';quests.appendChild(qnote);
   const teams=section('Wetterabhängige Petteams');check('Vorhandene Teams wechseln','teams',teams);
@@ -228,6 +297,7 @@ function mountAutomationUI(parent, engine, document) {
     fieldInfo.textContent=choices.fields?`Felder: ${choices.fields.plant} grün für Pflanzen · ${choices.fields.egg} blau für Eier. Grau wird ignoriert.`:'Felder in „Felder“ grün oder blau markieren. Grau wird ignoriert.';
     pickers.refresh(choices);pickers.options(weatherInput,choices.weather,weatherInput.value,'Wetter wählen');pickers.options(teamSelect,choices.pets,teamSelect.value,'Team wählen');refreshBuy(choices);
     refreshPetAdvisor();
+    refreshPetAutomation();
     status.textContent='Kataloge: '+info.catalogs+'\nWetter: '+(choices.weather.find(w=>w.id===info.weather)?.name||info.weather)+'\nKäufe heute: '+info.spentToday.toLocaleString('de-DE')+' Coins'+'\n'+info.modules.filter(m=>m.on).map(m=>m.label+': '+m.confirmed+' · '+m.status).join('\n')+(info.sell?'\nVerkauf: '+info.sell:'');
     const sig=JSON.stringify([c.buyRules,c.teamRules,choices.seeds.map(x=>[x.id,x.name]),choices.eggs.map(x=>[x.id,x.name]),choices.tools.map(x=>[x.id,x.name]),choices.decor.map(x=>[x.id,x.name]),choices.pets]);
     if(sig!==lastSignature){
