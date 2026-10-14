@@ -53,7 +53,7 @@ function createPetAutomationPolicy() {
     return {pet:null,why:'Keine sicher übertroffenen, freigegebenen Inventar-Pets'};
   }
   function recommendAriesUpdate(s,report,config,service) {
-    if(!config.ariesTeamSync)return {plan:null,why:'Aries-Sync aus'};
+    if(!config.ariesSync)return {plan:null,why:'Aries-Sync aus'};
     if(!service||typeof service.saveTeam!=='function'||typeof service.isTeamSyncEnabled!=='function'||
       !service.isTeamSyncEnabled())return {plan:null,why:'Aries Team-Service/Synchronisierung nicht bereit'};
     const teams=ariesTeams(service);
