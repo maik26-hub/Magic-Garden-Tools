@@ -889,7 +889,7 @@ function mountAutomationUI(parent, engine, document) {
     const option=document.createElement('option');option.value=goal.id;option.textContent=goal.name;advisorGoal.appendChild(option);
   }
   advisorGoal.value='afk';
-  row('Ziel für den Teamvergleich',advisorGoal,advisorPanel).classList.add('mg-wide-choice');
+  row('Welches Pet-Team optimieren?',advisorGoal,advisorPanel).classList.add('mg-wide-choice');
   const advisorText=document.createElement('div');advisorText.className='mg-pet-advisor-results';
   advisorPanel.appendChild(advisorText);
   explain('Nur Analyse: Keine Pets werden verkauft, verschoben oder automatisch ins Team eingesetzt. Ein hoher Vergleichswert ist eine relative Empfehlung, kein garantierter Bonus.',advisorPanel);
