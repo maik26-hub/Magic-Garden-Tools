@@ -100,7 +100,8 @@ function createNativeCatalogSource(env) {
       /\bcoinsToFullyReplenishHunger\b/.test(text) && /\bdiet\b/.test(text),
       /\bcoinMultiplier\b/.test(text) && /\bGrowth\b/.test(text),
       /\bWateringCan\b/.test(text) && /\bcoinPrice\b/.test(text),
-      /\bFeedingTrough\b/.test(text) && /\bcoinPrice\b/.test(text)
+      /\bFeedingTrough\b/.test(text) && /\bcoinPrice\b/.test(text),
+      /\bSellBoostI\b/.test(text) && /\bEggGrowthBoost\b/.test(text)
     ];
     return signals.some(Boolean) && /\bexport\b/.test(text);
   }
