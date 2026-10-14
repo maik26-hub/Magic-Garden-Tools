@@ -1,4 +1,4 @@
-# Magic Garden AutoFarm — V15.0.0
+# Magic Garden AutoFarm — V15.1.0
 
 Ein eigenständiges Tampermonkey-Skript mit Auto-Harvest, Auto-Sell und einer modularen Automationszentrale. Inoffizielles Community-Projekt, nicht mit Magic Garden verbunden.
 
@@ -10,7 +10,15 @@ V13-/V14-Nutzer benötigen keinen neuen Link und kein zweites Skript. Name (`Mag
 
 Neue Nutzer: [AutoFarm installieren](https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js).
 
-## Die neue Automationszentrale
+## Kompaktes Menü (V15.1)
+
+Zwölf schlichte Icon-Kacheln öffnen jeweils einen Bereich: Übersicht, Felder, Pflanzen, Pets & Futter, Einkauf, Schutz, Journal, Wetter, Autopilot, Einstellungen, Updates und Diagnose. Die lange Optionsliste ist in einzelne Ansichten aufgeteilt; alle vorhandenen Module und Einstellungen bleiben erhalten.
+
+**Die Kopfzeile mit Status, Version, Verschieben und Einklappen bleibt immer stehen.** Auch Start/Stop und der Zurück-Pfeil scrollen nicht mit; nur der Inhalt darunter scrollt. Das gilt ebenfalls auf kleinen Fenstern. Die zuletzt geöffnete Ansicht, Position und der eingeklappte Zustand werden gespeichert.
+
+Unter **Autopilot** stehen der Hauptschalter und das bisherige sichere Preset. **Übersicht** enthält die Session-Statistiken und den Reset. **Felder** unterstützt weiterhin Klicks und Ziehen. **Updates** bietet weiterhin **Update prüfen → Installieren** über exakt denselben Hauptkanal.
+
+## Die Automationsfunktionen
 
 Neue Aktionen sind beim Upgrade **zunächst aus**. Im Menü lassen sie sich einzeln freigeben. **„Sicherer Autopilot“** aktiviert Wertschutz, Journal, Pet-Fütterung, fertige Eier, Quest-Belohnungen und das Auffüllen vorhandener Lagerstapel — keine Einkäufe, kein Nachpflanzen und kein Gießkannenverbrauch.
 
@@ -52,3 +60,7 @@ Die Befehlsformen wurden am öffentlichen Spielbuild 1517 geprüft. Automatisier
 - `node --test tests/main-upgrade.test.cjs tests/automation.test.cjs tests/reservations.test.cjs`: aktuelle Regressionen.
 
 [Protokollgrundlage und Testgrenzen](AUTOMATION.md)
+
+## UI-Regressionen
+
+`python tests/browser/compact_menu.py` prüft die fertige Datei in Chromium mit simuliertem Spiel/Browser-Speicher. Screenshots und ein JSON-Bericht werden unter `test-output/` abgelegt. Abhängigkeit: Playwright für Python, Chromium (bei Bedarf `CHROMIUM_PATH`). Der Test benötigt keine Spiel- oder GitHub-Anmeldung und navigiert nicht zum Live-Spiel. Ein Seitenneustart wird mit einem neuen isolierten Dokument und wiederhergestellten Speichern simuliert.
