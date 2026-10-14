@@ -176,7 +176,7 @@ function mountAutomationUI(parent, engine, document) {
   petSellUI.appendChild(petSellHead);
   check('Pet Auto-Sell einschalten','petSell',petSellUI);
   const petSellEggFilter=pickers.multi(petSellUI,
-    'Nur Pets aus diesen Eiern verkaufen','petSellEggs','eggFilterChoices');
+    'Nur Pets aus diesen Eiern verkaufen','petSellEggs','petSellOriginChoices');
   number('Maximal Pets pro Sitzung','petSellPerSession',1,20,petSellUI);
   const petSellPreview=explain('Wird geladen …',petSellUI);
   explain('Nur nachweisbar schwächere Pets mit abgedeckten Max-Level-Boosts. Aktive, gesperrte, favorisierte, mutierte, in Teams/Pet Hutch benutzte Pets und unbekannte Ei-Herkunft bleiben geschützt. Leere Eier-Auswahl = kein Verkauf. Keine automatischen Pet-Verkäufe ohne Aktivierung.',petSellUI);
