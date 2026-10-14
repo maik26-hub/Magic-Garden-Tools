@@ -95,6 +95,7 @@ function mountAutomationUI(parent, engine, document) {
       'Pets: '+report.count+' · Aktiv: '+report.locations.active+
       ' · Inventar: '+report.locations.inventory+' · Pet Hutch: '+report.locations.hutch+
       ' · Wetter: '+report.weather));
+    advisorText.appendChild(make('h4','Behalten oder aussortieren?'));
     if(!report.count){
       advisorText.appendChild(make('p','Noch keine eigenen Pet-Daten. Warte auf den Spielzustand.'));
       return;
@@ -104,7 +105,6 @@ function mountAutomationUI(parent, engine, document) {
       ' · Behalten: '+report.retained+
       ' · Prüfen: '+report.pendingReview+
       ' · Fehlende XP/Boost-Daten werden nicht geraten.'));
-    advisorText.appendChild(make('h4','Behalten oder aussortieren?'));
     const decisions=document.createElement('details');
     decisions.className='mg-pet-advisor-decisions';decisions.open=true;
     decisions.appendChild(make('summary',
