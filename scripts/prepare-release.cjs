@@ -9,8 +9,11 @@ s=s.replace("source.replace('// @version      14.0.3',\n    '// @version      14
 s=s.replace("assert.equal(item('version'), '14.0.3')", "assert.equal(item('version'), '15.0.0')");
 s=s.replace("assert.equal(candidate, '14.0.3')", "assert.equal(candidate, '15.0.0')");
 fs.writeFileSync(file,s);
-// A room's selfPlayerId can change. Budget is shared per browser origin/day,
-// protected by the global Web Lock, never reset by switching rooms or accounts.
+// Room/player identities can change. Use a conservative browser-origin/day
+// budget shared by all rooms, with one global Web Lock for purchase writes.
 const core=path.join(root,'src/automation-core.js');let code=fs.readFileSync(core,'utf8');
 code=code.replace(/LEDGER\s*\+\s*':'\s*\+\s*s\.actor\s*\+\s*':'\s*\+\s*day/g,"LEDGER+':'+day");
+// The server's purchase count proves the action. Concurrent sales/pet income
+// can raise wallet balance, so a balance decrease is not a required condition.
+code=code.replace('&&s.own.coinsCount<=p.coinsBefore-p.price','');
 fs.writeFileSync(core,code);
