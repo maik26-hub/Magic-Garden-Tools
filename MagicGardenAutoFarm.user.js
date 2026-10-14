@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         Magic Garden AutoFarm
 // @namespace    mg-autofarm-local
-// @version      15.3.1
+// @version      15.4.0
 // @updateURL   https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js
 // @downloadURL https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js
-// @description  V15.3.1: cross-species max-level boost decisions for keep/review (read-only)
+// @description  V15.4.0: opt-in safe Pet Auto-Sell and Aries saved-team sync
 // @match        https://magicgarden.gg/*
 // @run-at       document-start
 // @grant        GM_xmlhttpRequest
@@ -585,13 +585,96 @@ function createPetAdvisor() {
 }
 if(typeof module!=='undefined'&&module.exports)module.exports={createPetAdvisor};
 
+/** Optional Aries integration and conservative Pet Sell plan.
+ * No external Aries code is copied. Aries currently exposes *saved* teams
+ * through QWS_PetsService, not Team Builder suggestions. AutoFarm may manage
+ * only an explicitly opted-in saved team using its own role recommendations.
+ */
+function createPetAutomationPolicy() {
+  'use strict';
+  const arr=x=>Array.isArray(x)?x:[];
+  const str=x=>typeof x==='string'&&x.length>0&&x.length<120;
+  const normalizeId=x=>typeof x==='string'?x.toLowerCase():'';
+  function ariesTeams(service) {
+    if(!service||typeof service.getTeams!=='function')return [];
+    try {
+      const rows=service.getTeams();
+      if(!Array.isArray(rows))return [];
+      return rows.filter(t=>t&&str(t.id)&&Array.isArray(t.slots)).slice(0,100).map(t=>({
+        id:t.id,name:str(t.name)?t.name:'Unbenanntes Aries-Team',
+        slots:t.slots.slice(0,3).map(x=>str(x)?x:null),
+        serverId:str(t.serverId)?t.serverId:null
+      }));
+    } catch {return [];}
+  }
+  function reservedAriesPetIds(service) {
+    return new Set(ariesTeams(service).flatMap(t=>t.slots.filter(str).map(normalizeId)));
+  }
+  function eligibleSell(s,report,config,service,protectedItem) {
+    if(!config.petSell||!config.petSellEggs?.length||!s?.inventory?.items)return {pet:null,why:'Kein Pet-Verkauf ohne Schalter und Herkunftsei-Auswahl'};
+    if(!report||!Array.isArray(report.profiles)||!Array.isArray(report.decisions))return {pet:null,why:'Pet-Analyse nicht bereit'};
+    const protectedAries=reservedAriesPetIds(service);
+    const nativeTeams=new Set(arr(s.own?.petTeams).flatMap(t=>arr(t?.members).map(m=>normalizeId(m?.petId)).filter(Boolean)));
+    const active=new Set(arr(s.own?.petSlots).map(p=>normalizeId(p?.id)).filter(Boolean));
+    const favorites=new Set(arr(s.inventory.favoritedItemIds).map(normalizeId));
+    const reportById=new Map(report.profiles.map(p=>[normalizeId(p.id),p]));
+    const decisions=new Map(report.decisions.map(d=>[normalizeId(d.id),d]));
+    for(const item of s.inventory.items){
+      if(item?.itemType!=='Pet'||!str(item.id)||!str(item.petSpecies))continue;
+      const id=normalizeId(item.id),profile=reportById.get(id),decision=decisions.get(id);
+      if(!profile||!decision||decision.autoSellAllowed===true||decision.kind!=='review'||!profile.sellCandidate)continue;
+      if(profile.location!=='Inventar'||profile.protected||profile.protection?.length)continue;
+      if(!str(profile.sourceEggId)||!config.petSellEggs.includes(profile.sourceEggId)||profile.sourceEggId!==item.sourceEggId)continue;
+      if(!Array.isArray(item.abilities)||!item.abilities.length||item.abilities.some(a=>!str(a)))continue;
+      if(!Array.isArray(item.mutations)||item.mutations.length||!Number.isFinite(item.xp)||!Number.isFinite(item.targetScale))continue;
+      if(favorites.has(id)||active.has(id)||nativeTeams.has(id)||protectedAries.has(id))continue;
+      if(item.locked||item.isLocked||item.protected||item.isProtected||protectedItem?.({},item))continue;
+      if(s.heldId===item.id)continue;
+      const parent=reportById.get(normalizeId(profile.dominatedBy));
+      if(!parent||!parent.metrics||!profile.metrics||parent.id===item.id)continue;
+      // The advisor has proved this exact *boost set* is covered by a pet
+      // retained for a purpose-built team; this excludes "weak" only by level.
+      if(!Object.values(report.teamPlans||{}).some(list=>arr(list).some(m=>normalizeId(m.id)===normalizeId(parent.id))))continue;
+      return {pet:item,why:'Max-Level-Boosts von einem reservierten Pet abgedeckt'};
+    }
+    return {pet:null,why:'Keine sicher übertroffenen, freigegebenen Inventar-Pets'};
+  }
+  function recommendAriesUpdate(s,report,config,service) {
+    if(!config.ariesSync)return {plan:null,why:'Aries-Sync aus'};
+    if(!service||typeof service.saveTeam!=='function'||typeof service.isTeamSyncEnabled!=='function'||
+      !service.isTeamSyncEnabled())return {plan:null,why:'Aries Team-Service/Synchronisierung nicht bereit'};
+    const teams=ariesTeams(service);
+    if(!teams.length)return {plan:null,why:'Keine gespeicherten Aries-Teams'};
+    if(!Array.isArray(report?.profiles)||!report?.teamPlans)return {plan:null,why:'Pet-Analyse nicht bereit'};
+    const owned=new Map(report.profiles.map(p=>[normalizeId(p.id),p.id]));
+    const goals=new Set(['sellCrops','afk','hatchQuality','hatchSpeed','plantGrowth','cropQuality','xp','sellPets']);
+    for(const rule of arr(config.ariesManagedTeams)){
+      if(!str(rule?.teamId)||!goals.has(rule.goal))continue;
+      const current=teams.find(t=>t.id===rule.teamId);
+      if(!current)continue;
+      // Require a server-linked team to ensure Aries actually syncs this
+      // template into the game instead of only changing local storage.
+      if(!current.serverId)continue;
+      const desired=arr(report.teamPlans[rule.goal]).slice(0,3).map(p=>owned.get(normalizeId(p.id))).filter(Boolean);
+      if(!desired.length||new Set(desired.map(normalizeId)).size!==desired.length)continue;
+      const currentMembers=current.slots.filter(Boolean).map(normalizeId);
+      if(JSON.stringify(currentMembers)===JSON.stringify(desired.map(normalizeId)))continue;
+      if(desired.some(id=>!owned.has(normalizeId(id))))continue;
+      return {plan:{id:current.id,name:current.name,goal:rule.goal,slots:[...desired,...Array(Math.max(0,3-desired.length)).fill(null)],before:current.slots},why:'Aries-Team kann mit eigenen Max-STR-Pets verbessert werden'};
+    }
+    return {plan:null,why:'Aries-Teams bereits passend oder keine geeigneten eigenen Pets'};
+  }
+  return {ariesTeams,reservedAriesPetIds,eligibleSell,recommendAriesUpdate};
+}
+if(typeof module!=='undefined'&&module.exports)module.exports={createPetAutomationPolicy};
+
 /* Native command shapes verified against public game build 1517.
  * Original implementation. The caller owns the only execution loop. */
 function createAutomationCore(env) {
   'use strict';
   const KEY='magic_garden_automation_v15', LEDGER='magic_garden_purchase_budget_v15', RECEIPTS='magic_garden_action_receipts_v15';
-  const names={favorite:'Wertschutz / Favoriten',journal:'Journal',feed:'Pets füttern',trough:'Futtertrog',claims:'Quest-Belohnungen',hatch:'Eier ausbrüten',plant:'Nachpflanzen',eggs:'Eier nachlegen',water:'Gießen',storage:'Lager',teams:'Wetter-Petteams',buy:'Shop-Einkauf'};
-  const defaults={enabled:false,favorite:false,journal:false,feed:false,trough:false,claims:false,hatch:false,plant:false,eggs:false,water:false,storage:false,teams:false,buy:false,seedSpecies:'',eggPlaceMode:'all',eggPlaceAllowed:[],eggHatchMode:'all',eggHatchAllowed:[],hungerPercent:30,foodMaxValue:1000,troughItems:5,toolReserve:2,waterMinSeconds:600,keepValue:0,keepSpecies:[],minHarvestSize:0,minHarvestValue:0,wantedMutations:[],pauseWeather:[],buyRules:[],teamRules:[],actionIntervalMs:900};
+  const names={favorite:'Wertschutz / Favoriten',journal:'Journal',feed:'Pets füttern',trough:'Futtertrog',claims:'Quest-Belohnungen',hatch:'Eier ausbrüten',plant:'Nachpflanzen',eggs:'Eier nachlegen',water:'Gießen',storage:'Lager',teams:'Wetter-Petteams',buy:'Shop-Einkauf',petSell:'Pet Auto-Sell',ariesSync:'Aries-Teams aktualisieren'};
+  const defaults={enabled:false,favorite:false,journal:false,feed:false,trough:false,claims:false,hatch:false,plant:false,eggs:false,water:false,storage:false,teams:false,buy:false,petSell:false,ariesSync:false,petSellEggs:[],petSellPerSession:5,ariesManagedTeams:[],seedSpecies:'',eggPlaceMode:'all',eggPlaceAllowed:[],eggHatchMode:'all',eggHatchAllowed:[],hungerPercent:30,foodMaxValue:1000,troughItems:5,toolReserve:2,waterMinSeconds:600,keepValue:0,keepSpecies:[],minHarvestSize:0,minHarvestValue:0,wantedMutations:[],pauseWeather:[],buyRules:[],teamRules:[],actionIntervalMs:900};
   const arr=v=>Array.isArray(v)?v:[],num=v=>typeof v==='number'&&Number.isFinite(v),str=v=>typeof v==='string'&&v.length>0&&v.length<120,obj=v=>v&&typeof v==='object'&&!Array.isArray(v);
   const cleanList=v=>[...new Set(arr(v).filter(str))].slice(0,40);
   const bounded=(v,f,min,max)=>num(v)?Math.min(max,Math.max(min,Math.round(v))):f;
@@ -616,7 +699,12 @@ function createAutomationCore(env) {
     // Bisher oeffnete der Bot alle reifen Eier auf blauen Feldern.
     out.eggHatchMode = v.eggHatchMode === 'selected' ? 'selected' : 'all';
     out.eggHatchAllowed = cleanList(v.eggHatchAllowed);
-    for(const key of ['keepSpecies','wantedMutations','pauseWeather'])out[key]=cleanList(v[key]);
+    for(const key of ['keepSpecies','wantedMutations','pauseWeather','petSellEggs'])out[key]=cleanList(v[key]);
+    out.petSellPerSession=bounded(v.petSellPerSession,5,1,20);
+    const goals=new Set(['sellCrops','afk','hatchQuality','hatchSpeed','plantGrowth','cropQuality','xp','sellPets']);
+    out.ariesManagedTeams=arr(v.ariesManagedTeams)
+      .filter(r=>obj(r)&&str(r.teamId)&&goals.has(r.goal))
+      .slice(0,16).map(r=>({teamId:r.teamId,goal:r.goal}));
     const ranges={hungerPercent:[1,90],foodMaxValue:[1,1e9],troughItems:[0,50],toolReserve:[0,99],waterMinSeconds:[30,86400],keepValue:[0,1e12],minHarvestSize:[0,100],minHarvestValue:[0,1e12],actionIntervalMs:[500,10000]};
     for(const [key,limits]of Object.entries(ranges))out[key]=bounded(v[key],defaults[key],...limits);
     const shops=['seed','egg','tool','decor','rain','dawn','amber','snow','thunder','apology'];
@@ -625,6 +713,8 @@ function createAutomationCore(env) {
   }
   let config=normalize(read(KEY,{})),catalogs={},catalogMessage='Warte auf Spielkataloge',loading=false,nextCatalogAt=0,catalogFailures=0,lastActionAt=-Infinity,busy=false,lastModule='',runGeneration=0;
   const petAdvisor=(typeof createPetAdvisor==='function' ? createPetAdvisor : require('./pet-advisor.js').createPetAdvisor)();
+  const petPolicy=(typeof createPetAutomationPolicy==='function'
+    ? createPetAutomationPolicy : require('./pet-automation.js').createPetAutomationPolicy)();
   const counts=Object.fromEntries(Object.keys(names).map(k=>[k,0])),reasons={},events=[],receipts=new Map();
   for(const r of arr(read(RECEIPTS,[])).slice(-200))if(obj(r)&&typeof r.key==='string'&&r.key.length<400&&num(r.until)&&r.until>env.now()&&typeof r.fp==='string')receipts.set(r.key,r);
   const now=()=>env.now();
@@ -740,6 +830,38 @@ function createAutomationCore(env) {
   function planStorage(s){for(const i of s.inventory.items){const type=i?.itemType,id=kindId(i),key=itemKey(i),to={Seed:'SeedSilo',Tool:'ToolShack',Decor:'DecorShed'}[type];if(!to||!str(key)||nativeFavorite(s,i)||i.remainingActiveSeconds>0)continue;if(type==='Seed'&&config.plant&&id===config.seedSpecies)continue;if(type==='Tool'&&['Camera','WateringCan'].includes(id))continue;if(s.heldId===key)continue;const st=storageFor(s,to),same=arr(st?.items).find(x=>x?.itemType===type&&itemKey(x)===key);if(!same||quantity(i)<=0)continue;const limit=catalogFor(type,id)?.maxInventoryQuantity,qty=num(limit)?Math.min(quantity(i),Math.max(0,limit-quantity(same))):quantity(i);if(qty<=0)continue;return job('storage','store:'+key,quantity(i)+':'+quantity(same),{type:'MoveItem',from:'inventory',to,itemId:key,quantity:qty},n=>total(n,type,id)<total(s,type,id),3000);}return null;}
   function planTeams(s){const r=config.teamRules.find(r=>r.weather===weather(s));if(!r){reasons.teams='Keine Regel für aktuelles Wetter';return null;}const team=arr(s.own.petTeams).find(t=>t?.id===r.teamId),ids=arr(team?.members).map(m=>m.petId).filter(str).sort();if(!team||!ids.length)return null;const active=arr(s.own.petSlots).map(p=>p.id).filter(str).sort();if(JSON.stringify(ids)===JSON.stringify(active))return null;if(s.inventory.items.length>=95){reasons.teams='Inventar zu voll für Teamwechsel';return null;}return job('teams','team:'+r.teamId,weather(s)+':'+active.join(','),{type:'ApplyPetTeam',teamId:r.teamId},n=>JSON.stringify(arr(n.own.petSlots).map(p=>p.id).sort())===JSON.stringify(ids),60000);}
   function ledger(s){const day=new Date(s.serverNow).toISOString().slice(0,10),key=LEDGER+':'+day,stored=read(key,{spent:0,counts:{},inflight:null});if(!obj(stored)||!num(stored.spent)||stored.spent<0||!obj(stored.counts))return null;return {key,day,data:stored};}
+  function planPetSell(s) {
+    if(counts.petSell>=config.petSellPerSession){
+      reasons.petSell='Sicherheitslimit pro Sitzung erreicht';return null;
+    }
+    const service=env.ariesService?.()||null;
+    const report=petAdvisor.analyze(s,catalogs,'sellPets');
+    const proposed=petPolicy.eligibleSell(s,report,config,service,env.protected);
+    if(!proposed.pet){reasons.petSell=proposed.why;return null;}
+    const id=proposed.pet.id;
+    const j=job('petSell','sellpet:'+id,
+      [id,proposed.pet.xp,proposed.pet.targetScale,arr(proposed.pet.abilities).join('|')].join(':'),
+      {type:'SellPet',itemId:id},
+      next=>!arr(next.inventory?.items).some(i=>i?.itemType==='Pet'&&i.id===id),
+      600000);
+    if(j)j.petSellId=id;
+    return j;
+  }
+  function planAriesSync(s) {
+    const service=env.ariesService?.()||null;
+    const report=petAdvisor.analyze(s,catalogs,'afk');
+    const proposed=petPolicy.recommendAriesUpdate(s,report,config,service);
+    if(!proposed.plan){reasons.ariesSync=proposed.why;return null;}
+    const p=proposed.plan;
+    const normalized=p.slots.filter(Boolean);
+    const j=job('ariesSync','aries:'+p.id,normalized.join('|'),
+      {type:'SyncSavedAriesTeam',teamId:p.id,petIds:normalized},
+      ()=>{const latest=petPolicy.ariesTeams(env.ariesService?.()||null).find(t=>t.id===p.id);
+        return !!latest&&JSON.stringify(latest.slots.filter(Boolean))===JSON.stringify(normalized);},
+      60000);
+    if(j)j.ariesPlan=p;
+    return j;
+  }
   function planBuy(s){
     if(!config.buyRules.length){reasons.buy='Artikel auswählen und Kaufregel speichern';return null;}
     if(!num(s.own.coinsCount)||s.inventory.items.length>=98){reasons.buy='Coins / Inventarplatz nicht sicher';return null;}
@@ -765,7 +887,7 @@ function createAutomationCore(env) {
       if(j)j.purchase={key:budget.key,token,price,coins:s.own.coinsCount,shop:r.shop,restockId:shop.restockId,id:r.id,beforeCount:purchased||0};return j;
     }return null;
   }
-  const planners={favorite:planFavorite,journal:planJournal,feed:planFeed,trough:planTrough,claims:planClaims,hatch:planHatch,plant:planPlant,eggs:planEggs,water:planWater,storage:planStorage,teams:planTeams,buy:planBuy};
+  const planners={favorite:planFavorite,journal:planJournal,feed:planFeed,trough:planTrough,claims:planClaims,hatch:planHatch,plant:planPlant,eggs:planEggs,water:planWater,storage:planStorage,teams:planTeams,buy:planBuy,petSell:planPetSell,ariesSync:planAriesSync};
   function candidates(s){const output=[];for(const [module,plan]of Object.entries(planners)){if(!config[module]){reasons[module]='Aus';continue;}reasons[module]='Nichts zu tun';try{const j=plan(s);if(j){reasons[module]='Bereit';output.push(j);}}catch{reasons[module]='Unerwartete Spieldaten – ausgelassen';}}return output;}
   function selectedJob(s){const all=candidates(s),urgent=all.find(j=>['favorite','claims','feed'].includes(j.module));const priority={plantSeeds:'plant',growEggs:'eggs',hatchEggs:'hatch',waterPlants:'water',feedPets:'feed',logJournal:'journal',buySeeds:'buy',buyEggs:'buy',buyDecor:'buy'};const goals=arr(s.own.dailyQuests?.quests).filter(q=>q?.claimedAt===null&&q?.completedAt===null).map(q=>priority[q.objective?.kind]).filter(Boolean);const questAction=all.find(j=>goals.includes(j.module)&&j.module!==lastModule);return urgent||questAction||all.find(j=>j.module!==lastModule)||all[0]||null;}
   async function execute(candidate,s){
@@ -777,8 +899,28 @@ function createAutomationCore(env) {
     if(!persistReceipts()){receipts.delete(latest.key);reasons[latest.module]='Speicher voll – Aktion gesperrt';return false;}
     if(latest.purchase){const b=ledger(fresh);if(!b)return false;const p=latest.purchase;if(b.key!==p.key||b.data.inflight||fresh.own.coinsCount<p.price)return false;b.data.spent+=p.price;b.data.counts[p.token]=(b.data.counts[p.token]||0)+1;b.data.inflight={shop:p.shop,restockId:p.restockId,id:p.id,beforeCount:p.beforeCount,coinsBefore:fresh.own.coinsCount,price:p.price};if(!write(b.key,b.data)){reasons.buy='Kaufstatus nicht speicherbar – Kauf pausiert';return false;}}
     lastActionAt=now();lastModule=latest.module;
-    try{const response=await env.send(latest.command);if(response?.ok!==true)throw new Error('Aktion nicht bestätigt');counts[latest.module]++;record.status='confirmed';record.until=latest.module==='favorite'?Number.MAX_SAFE_INTEGER:now()+600000;event(latest.module,'Bestätigt');reasons[latest.module]='Bestätigt; warte auf Zustandsänderung';if(latest.module==='favorite')record.after=now()+600000;if(latest.effect&&latest.module!=='favorite'){const updated=snapshot();if(updated&&latest.effect(updated))record.until=Math.max(record.after,now()+500);}}
-    catch(error){record.status='uncertain';record.until=latest.module==='favorite'?Number.MAX_SAFE_INTEGER:now()+600000;reasons[latest.module]=latest.module==='favorite'?'Unklar – Favoriten-Toggle wird nicht wiederholt':'Nicht bestätigt – 10 Minuten kein Wiederholen';event(latest.module,'Abgelehnt / unbekannt; geschützt pausiert');}
+    try{const response=latest.module==='ariesSync'
+      ? await env.updateAriesTeam?.(latest.ariesPlan)
+      : await env.send(latest.command);
+      if(response?.ok!==true)throw new Error('Aktion nicht bestätigt');
+      counts[latest.module]++;record.status='confirmed';record.until=latest.module==='favorite'?Number.MAX_SAFE_INTEGER:now()+600000;event(latest.module,'Bestätigt');reasons[latest.module]='Bestätigt; warte auf Zustandsänderung';if(latest.module==='favorite')record.after=now()+600000;if(latest.effect&&latest.module!=='favorite'){const updated=snapshot();if(updated&&latest.effect(updated))record.until=Math.max(record.after,now()+500);}}
+    catch(error){
+      // SellPet has no guaranteed command acknowledgement. The game's own
+      // inventory is the only confirmation; never turn a timeout into a retry.
+      const after=snapshot();
+      const observedPetGone=latest.module==='petSell'&&after&&
+        after.actor===fresh.actor&&after.generation===fresh.generation&&latest.effect?.(after);
+      if(observedPetGone){
+        counts.petSell++;record.status='confirmed';record.until=now()+600000;
+        reasons.petSell='Pet im Inventar nicht mehr vorhanden – als verkauft beobachtet';
+        event('petSell','Pet nicht mehr im Inventar');
+      }else{
+        record.status='uncertain';
+        record.until=latest.module==='favorite'?Number.MAX_SAFE_INTEGER:now()+600000;
+        reasons[latest.module]=latest.module==='favorite'?'Unklar – Favoriten-Toggle wird nicht wiederholt':'Nicht bestätigt – 10 Minuten kein Wiederholen';
+        event(latest.module,'Abgelehnt / unbekannt; geschützt pausiert');
+      }
+    }
     persistReceipts();return true;
   }
   async function step(){if(!config.enabled||!env.running()||busy)return false;void loadCatalogs();if(now()-lastActionAt<config.actionIntervalMs)return false;const s=snapshot();if(!s)return false;const candidate=selectedJob(s);if(!candidate)return false;busy=true;const generation=runGeneration;try{if(candidate.module==='buy'){if(typeof env.withPurchaseLock!=='function'){reasons.buy='Browser-Kaufsperre nicht verfügbar';return false;}return await env.withPurchaseLock(s.actor,async()=>generation===runGeneration&&env.running()?execute(candidate,s):false);}return await execute(candidate,s);}finally{busy=false;}}
@@ -824,10 +966,20 @@ function createAutomationCore(env) {
     };
     const weatherIds = [...new Set([...Object.keys(weatherNames),...(s?[weather(s)]:[]),...arr(s?.game.weatherForecast).map(w=>w?.weatherId).filter(str)])];
     const eggChoices=catalogList('Egg',catalogs.eggs);
+    const ownedPets=s?[...arr(s.own.petSlots),...s.inventory.items,
+      ...arr(s.inventory.storages).flatMap(storage=>arr(storage?.items))]
+      .filter(p=>p?.itemType==='Pet'||arr(s.own.petSlots).includes(p)): [];
+    const eggSources=[...new Set(ownedPets.map(p=>p?.sourceEggId).filter(str))];
+    const eggOrigins=[...eggChoices,...eggSources
+      .filter(id=>!eggChoices.some(e=>e.id===id))
+      .map(id=>({id,name:human(id)}))];
+    const petSellOriginChoices=eggOrigins.map(e=>({...e,
+      name:e.name+' · '+ownedPets.filter(p=>p.sourceEggId===e.id).length+' eigene Pets'}));
     return {
       seeds:catalogList('Seed',catalogs.plants), eggs:eggChoices,
       eggFilterChoices:eggChoices.map(e=>({...e,
         name:e.name+' · '+(e.inventoryCount??0)+' im Inventar'})),
+      petSellOriginChoices,
       tools:catalogList('Tool',catalogs.tools), decor:catalogList('Decor',catalogs.decor),
       mutations:Object.entries(catalogs.mutations||{}).map(([id,m])=>({id,name:m.name||human(id)})).sort((a,b)=>a.name.localeCompare(b.name,'de')),
       weather:weatherIds.map(id=>({id,name:weatherNames[id]||human(id)})),
@@ -836,7 +988,7 @@ function createAutomationCore(env) {
       fields:s?{plant:plots(s,'plant').length,egg:plots(s,'egg').length}:null
     };
   }
-  return {menuChoices,configure,getConfig:()=>structuredClone(config),step,preview,status,loadCatalogs,harvestAllowed,saleAllowed,produceValue,petGoals:petAdvisor.goals,analyzePets:goal=>petAdvisor.analyze(snapshot(),catalogs,goal),resetCounters(){for(const k of Object.keys(counts))counts[k]=0;events.length=0;},stop(){runGeneration++;},catalogs:()=>catalogs,choices(){const s=snapshot();return {seeds:Object.keys(catalogs.plants||{}),eggs:Object.keys(catalogs.eggs||{}),tools:Object.keys(catalogs.tools||{}),decor:Object.keys(catalogs.decor||{}),pets:arr(s?.own.petTeams).map(t=>({id:t.id,name:t.name||'Team'}))};}};
+  return {menuChoices,configure,getConfig:()=>structuredClone(config),step,preview,status,loadCatalogs,harvestAllowed,saleAllowed,produceValue,petGoals:petAdvisor.goals,analyzePets:goal=>petAdvisor.analyze(snapshot(),catalogs,goal),ariesTeams:()=>petPolicy.ariesTeams(env.ariesService?.()||null),petSellProposal:()=>{const s=snapshot();return s?petPolicy.eligibleSell(s,petAdvisor.analyze(s,catalogs,'sellPets'),config,env.ariesService?.()||null,env.protected):{pet:null,why:'Spieldaten fehlen'};},resetCounters(){for(const k of Object.keys(counts))counts[k]=0;events.length=0;},stop(){runGeneration++;},catalogs:()=>catalogs,choices(){const s=snapshot();return {seeds:Object.keys(catalogs.plants||{}),eggs:Object.keys(catalogs.eggs||{}),tools:Object.keys(catalogs.tools||{}),decor:Object.keys(catalogs.decor||{}),pets:arr(s?.own.petTeams).map(t=>({id:t.id,name:t.name||'Team'}))};}};
 }
 
 
@@ -1076,6 +1228,75 @@ function mountAutomationUI(parent, engine, document) {
   }
   advisorGoal.addEventListener('change',()=>{lastPetSignature='';refreshPetAdvisor();});
 
+  // Opt-in Pet Auto-Sell. Only safely dominated *inventory* pets with a
+  // specifically allowed source egg are eligible. Never bulk-sell by rarity.
+  const petSellUI=document.createElement('details');petSellUI.className='mg-pet-autosell';petSellUI.open=true;
+  const petSellHead=document.createElement('summary');petSellHead.textContent='Pet Auto-Sell · sichere Duplikate';
+  petSellUI.appendChild(petSellHead);
+  check('Pet Auto-Sell einschalten','petSell',petSellUI);
+  const petSellEggFilter=pickers.multi(petSellUI,
+    'Nur Pets aus diesen Eiern verkaufen','petSellEggs','petSellOriginChoices');
+  number('Maximal Pets pro Sitzung','petSellPerSession',1,20,petSellUI);
+  const petSellPreview=explain('Wird geladen …',petSellUI);
+  explain('Nur nachweisbar schwächere Pets mit abgedeckten Max-Level-Boosts. Aktive, gesperrte, favorisierte, mutierte, in Teams/Pet Hutch benutzte Pets und unbekannte Ei-Herkunft bleiben geschützt. Leere Eier-Auswahl = kein Verkauf. Keine automatischen Pet-Verkäufe ohne Aktivierung.',petSellUI);
+  pets.appendChild(petSellUI);
+
+  // Aries exposes saved teams through QWS_PetsService, but NOT the Team
+  // Builder's unsaved suggestions. Users must explicitly opt in a saved
+  // Aries team + goal. Our own local advisor supplies max-STR candidates.
+  const ariesUI=document.createElement('details');ariesUI.className='mg-aries-team-sync';
+  ariesUI.open=true;ariesUI.appendChild((()=>{const n=document.createElement('summary');n.textContent='Aries-Teams automatisch aktualisieren';return n;})());
+  check('Aries-Team-Sync einschalten','ariesSync',ariesUI);
+  const ariesTeamPick=document.createElement('select');ariesTeamPick.style.cssText=style;
+  row('Gespeichertes Aries-Team',ariesTeamPick,ariesUI).classList.add('mg-wide-choice');
+  const ariesGoalPick=document.createElement('select');ariesGoalPick.style.cssText=style;
+  row('Optimieren für',ariesGoalPick,ariesUI).classList.add('mg-wide-choice');
+  for(const goal of engine.petGoals||[]){
+    const option=document.createElement('option');option.value=goal.id;option.textContent=goal.name;
+    ariesGoalPick.appendChild(option);
+  }
+  const ariesManagedList=document.createElement('div');ariesUI.appendChild(ariesManagedList);
+  const ariesInfo=explain('Warte auf Arie’s Mod …',ariesUI);
+  button('Dieses Aries-Team verwalten',()=>{
+    if(!ariesTeamPick.value||!ariesGoalPick.value){alert.textContent='Team und Ziel auswählen';return;}
+    const rows=config().ariesManagedTeams.filter(t=>t.teamId!==ariesTeamPick.value);
+    save({ariesManagedTeams:[...rows,{teamId:ariesTeamPick.value,goal:ariesGoalPick.value}]});
+  },ariesUI);
+  explain('Aries muss installiert sein und seine Team-Synchronisierung aktiviert haben. Nur ausdrücklich registrierte gespeicherte Teams werden geändert. Unsere Max-STR-Bewertung wählt neue Mitglieder; Aries’ interne Team-Builder-Vorschläge sind derzeit nicht öffentlich zugänglich.',ariesUI);
+  pets.appendChild(ariesUI);
+  let lastAriesSig='';
+  function refreshPetAutomation(){
+    const c=config(),ariesTeams=engine.ariesTeams?.()||[];
+    const proposed=engine.petSellProposal?.();
+    petSellPreview.textContent=c.petSell
+      ? (proposed?.pet
+        ? 'Nächster sicherer Kandidat: '+(proposed.pet.name||proposed.pet.petSpecies)+
+          ' · Herkunft: '+proposed.pet.sourceEggId+
+          ' · '+proposed.why
+        : 'Verkauf wartet: '+(proposed?.why||'Spieldaten fehlen'))
+      : 'Pet Auto-Sell ist AUS. Nur die Vorschau ist aktiv.';
+    pickers.options(ariesTeamPick,
+      ariesTeams.map(t=>({id:t.id,name:t.name+(t.serverId?'':' · nicht mit Spiel synchronisiert')})),
+      ariesTeamPick.value,'Aries-Team wählen');
+    ariesInfo.textContent=ariesTeams.length
+      ? ariesTeams.length+' gespeicherte Aries-Teams erkannt. Nur Teams mit aktivem Spiel-Sync lassen sich automatisch aktualisieren.'
+      : 'Aries-Team-Service noch nicht gefunden. Installiere/aktiviere Arie’s Mod.';
+    const signature=JSON.stringify([c.ariesManagedTeams,ariesTeams]);
+    if(signature===lastAriesSig)return;
+    lastAriesSig=signature;ariesManagedList.replaceChildren();
+    for(const rule of c.ariesManagedTeams){
+      const card=document.createElement('div');card.className='mg-buy-rule';
+      const team=ariesTeams.find(t=>t.id===rule.teamId);
+      const goal=(engine.petGoals||[]).find(g=>g.id===rule.goal);
+      const label=document.createElement('p');
+      label.textContent=(team?.name||'Gespeichertes Aries-Team derzeit nicht verfügbar')+
+        ' → '+(goal?.name||rule.goal);
+      card.appendChild(label);
+      button('Verwaltung entfernen',()=>save({
+        ariesManagedTeams:config().ariesManagedTeams.filter(r=>r.teamId!==rule.teamId)
+      }),card);ariesManagedList.appendChild(card);
+    }
+  }
   const quests=section('Journal & tägliche Quests');check('Neue Journalvarianten fotografieren','journal',quests);check('Fertige Belohnungen abholen','claims',quests);
   const qnote=document.createElement('small');qnote.textContent='Camera benötigt. Questbelohnungen werden nicht teilweise verworfen. Quests werden nicht blind durch Einkäufe oder Umgraben erzwungen.';quests.appendChild(qnote);
   const teams=section('Wetterabhängige Petteams');check('Vorhandene Teams wechseln','teams',teams);
@@ -1135,6 +1356,7 @@ function mountAutomationUI(parent, engine, document) {
     fieldInfo.textContent=choices.fields?`Felder: ${choices.fields.plant} grün für Pflanzen · ${choices.fields.egg} blau für Eier. Grau wird ignoriert.`:'Felder in „Felder“ grün oder blau markieren. Grau wird ignoriert.';
     pickers.refresh(choices);pickers.options(weatherInput,choices.weather,weatherInput.value,'Wetter wählen');pickers.options(teamSelect,choices.pets,teamSelect.value,'Team wählen');refreshBuy(choices);
     refreshPetAdvisor();
+    refreshPetAutomation();
     status.textContent='Kataloge: '+info.catalogs+'\nWetter: '+(choices.weather.find(w=>w.id===info.weather)?.name||info.weather)+'\nKäufe heute: '+info.spentToday.toLocaleString('de-DE')+' Coins'+'\n'+info.modules.filter(m=>m.on).map(m=>m.label+': '+m.confirmed+' · '+m.status).join('\n')+(info.sell?'\nVerkauf: '+info.sell:'');
     const sig=JSON.stringify([c.buyRules,c.teamRules,choices.seeds.map(x=>[x.id,x.name]),choices.eggs.map(x=>[x.id,x.name]),choices.tools.map(x=>[x.id,x.name]),choices.decor.map(x=>[x.id,x.name]),choices.pets]);
     if(sig!==lastSignature){
@@ -1613,7 +1835,7 @@ function mountFieldGrid(container, plan, onChange) {
   }
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-  const VERSION = "15.3.1";
+  const VERSION = "15.4.0";
   const UPDATE_URL = "https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js";
   const NUMBER_FIELDS = Object.freeze({
     sellThreshold: { min: 5, max: 200, step: 1 },
@@ -2975,6 +3197,22 @@ function mountFieldGrid(container, plan, onChange) {
     loadCatalogs: loadNativeAutomationCatalogs,
     catalogDiagnostics: () => nativeCatalogSource.diagnostics(),
     onCatalogsChanged: () => automationUI?.refresh(),
+    ariesService: () => {
+      const svc=window.QWS_PetsService;
+      return svc&&typeof svc.getTeams==='function'?svc:null;
+    },
+    updateAriesTeam: async plan => {
+      const svc=window.QWS_PetsService;
+      if(!svc||!svc.isTeamSyncEnabled?.()||typeof svc.saveTeam!=='function'||
+        typeof svc.getTeams!=='function')return {ok:false};
+      const before=svc.getTeams().find(t=>t.id===plan.id);
+      if(!before||!before.serverId||
+        JSON.stringify(before.slots?.slice(0,3))!==JSON.stringify(plan.before.slice(0,3)))return {ok:false};
+      const updated=svc.saveTeam({id:plan.id,slots:plan.slots});
+      const after=svc.getTeams().find(t=>t.id===plan.id);
+      return {ok:!!updated&&!!after&&
+        JSON.stringify(after.slots?.slice(0,3))===JSON.stringify(plan.slots)};
+    },
     withPurchaseLock: (actor, fn) => typeof navigator.locks?.request === 'function'
       ? navigator.locks.request('magic-garden-autofarm-purchases',{ifAvailable:true}, lock => lock ? fn() : false)
       : Promise.resolve(false)
@@ -3017,5 +3255,5 @@ function mountFieldGrid(container, plan, onChange) {
   if (readValue(sessionStorage, KEYS.resume) === "1") {
     start({ auto: true });
   }
-  console.log("✅ Magic Garden AutoFarm V15.3.1 geladen (Automationszentrale, ohne Fremdskripte).");
+  console.log("✅ Magic Garden AutoFarm V15.4.0 geladen (Automationszentrale, ohne Fremdskripte).");
 })();
