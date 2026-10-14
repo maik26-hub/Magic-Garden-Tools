@@ -4,10 +4,10 @@ const root=path.resolve(__dirname,'..');
 let src=fs.readFileSync(path.join(root,'src/core-v14.user.js'),'utf8');
 function replace(a,b,name){const parts=src.split(a);if(parts.length!==2)throw Error(`${name}: expected one anchor, got ${parts.length-1}`);src=parts[0]+b+parts[1];}
 function stripExports(file){return fs.readFileSync(path.join(root,'src',file),'utf8').replace(/^if \(typeof module[^\n]*$/m,'');}
-replace('// @version      14.0.3','// @version      15.3.1','metadata version');
-replace('const VERSION = "14.0.3"','const VERSION = "15.3.1"','runtime version');
-replace('// @description  V14.0.3: standalone auto-farm, direct V13 update, AFK watchdog and safe reconnect/reload recovery','// @description  V15.3.1: cross-species max-level boost decisions for keep/review (read-only)','description');
-replace('  "use strict";', '  "use strict";\n\n'+stripExports('catalog-source.js')+'\n'+stripExports('pet-advisor.js')+'\n'+stripExports('automation-core.js')+'\n'+stripExports('choice-controls.js')+'\n'+stripExports('automation-ui.js')+'\n  let automation = null;\n  let automationUI = null;','inline modules');
+replace('// @version      14.0.3','// @version      15.4.0','metadata version');
+replace('const VERSION = "14.0.3"','const VERSION = "15.4.0"','runtime version');
+replace('// @description  V14.0.3: standalone auto-farm, direct V13 update, AFK watchdog and safe reconnect/reload recovery','// @description  V15.4.0: opt-in safe Pet Auto-Sell and Aries saved-team sync','description');
+replace('  "use strict";', '  "use strict";\n\n'+stripExports('catalog-source.js')+'\n'+stripExports('pet-advisor.js')+'\n'+stripExports('pet-automation.js')+'\n'+stripExports('automation-core.js')+'\n'+stripExports('choice-controls.js')+'\n'+stripExports('automation-ui.js')+'\n  let automation = null;\n  let automationUI = null;','inline modules');
 replace('    sequence: -1, frontier: -1, lastSnapshotAt: 0, observedSockets: 0',`    sequence: -1, frontier: -1, lastSnapshotAt: 0, observedSockets: 0,
     own: null, game: null, actor: null, heldId: '', generation: 0,
     welcomed: false, cancelPending: null, serverOffset: 0`,'bridge fields');
@@ -132,6 +132,22 @@ replace('  // ===== Konsole =====',`  // ===== Own-game catalogs: observe early,
     loadCatalogs: loadNativeAutomationCatalogs,
     catalogDiagnostics: () => nativeCatalogSource.diagnostics(),
     onCatalogsChanged: () => automationUI?.refresh(),
+    ariesService: () => {
+      const svc=window.QWS_PetsService;
+      return svc&&typeof svc.getTeams==='function'?svc:null;
+    },
+    updateAriesTeam: async plan => {
+      const svc=window.QWS_PetsService;
+      if(!svc||!svc.isTeamSyncEnabled?.()||typeof svc.saveTeam!=='function'||
+        typeof svc.getTeams!=='function')return {ok:false};
+      const before=svc.getTeams().find(t=>t.id===plan.id);
+      if(!before||!before.serverId||
+        JSON.stringify(before.slots?.slice(0,3))!==JSON.stringify(plan.before.slice(0,3)))return {ok:false};
+      const updated=svc.saveTeam({id:plan.id,slots:plan.slots});
+      const after=svc.getTeams().find(t=>t.id===plan.id);
+      return {ok:!!updated&&!!after&&
+        JSON.stringify(after.slots?.slice(0,3))===JSON.stringify(plan.slots)};
+    },
     withPurchaseLock: (actor, fn) => typeof navigator.locks?.request === 'function'
       ? navigator.locks.request('magic-garden-autofarm-purchases',{ifAvailable:true}, lock => lock ? fn() : false)
       : Promise.resolve(false)
@@ -141,10 +157,10 @@ replace('  // ===== Konsole =====',`  // ===== Own-game catalogs: observe early,
   // ===== Konsole =====`,'init engine');
 replace('    state, cfg, prefs, start, stop, resetTimer, resetSession, selectedSlots, getDiagnostics, checkForUpdate, setNumberPreference,','    state, cfg, prefs, start, stop, resetTimer, resetSession, selectedSlots, getDiagnostics, checkForUpdate, setNumberPreference, automation,','public API');
 replace('      runtimeSeconds: Math.floor(runtimeMs() / 1000)','      runtimeSeconds: Math.floor(runtimeMs() / 1000),\n      automation: automation?.status() || null','diag');
-replace('console.log("✅ Magic Garden AutoFarm V14.0.3 geladen (keine QPM-/Companion-Abhaengigkeit).");','console.log("✅ Magic Garden AutoFarm V15.3.1 geladen (Automationszentrale, ohne Fremdskripte).");','boot');
+replace('console.log("✅ Magic Garden AutoFarm V14.0.3 geladen (keine QPM-/Companion-Abhaengigkeit).");','console.log("✅ Magic Garden AutoFarm V15.4.0 geladen (Automationszentrale, ohne Fremdskripte).");','boot');
 src = require('./compact-menu.cjs')(src, stripExports('compact-menu.js'));
 src = require('./field-plan.cjs')(src, stripExports('field-plan.js'));
 src = require('./header-updater.cjs')(src, stripExports('update-fetch.js'));
 new vm.Script(src,{filename:'MagicGardenAutoFarm.user.js'});
 fs.writeFileSync(path.join(root,'MagicGardenAutoFarm.user.js'),src);
-console.log('Built V15.3.1:',Buffer.byteLength(src),'bytes');
+console.log('Built V15.4.0:',Buffer.byteLength(src),'bytes');

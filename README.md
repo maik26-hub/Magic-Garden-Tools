@@ -1,6 +1,18 @@
-# Magic Garden AutoFarm — V15.3.1
+# Magic Garden AutoFarm — V15.4.0
 
 Eigenständiges Tampermonkey-Skript für Magic Garden. Inoffizielles Community-Projekt, nicht mit dem Spiel verbunden.
+
+## V15.4.0 – Pet Auto-Sell und Aries-Team-Sync
+
+**Pet Auto-Sell (standardmäßig AUS):** Unter **Pets & Futter** kannst du **„Pet Auto-Sell einschalten“** aktivieren, **Herkunftseier mit Häkchen** auswählen (z. B. Common Egg und Uncommon Egg) und die maximale Anzahl an Verkäufen pro laufender Sitzung einstellen (1–20, voreingestellt 5). Der Bot verkauft **nicht** blind alle Pets dieser Eier. Er berücksichtigt nur **im Inventar** liegende Pets, deren individuelle Max-STR-/Fähigkeitenkombination nachweisbar von einem Pet übertroffen wird, das für eines der Spezialteams reserviert ist. Er schützt aktiv verwendete, in normalen/Aries-Teams gespeicherte, favorisierte, gesperrte, mutierte und im Pet Hutch gelagerte Pets sowie Pets mit unbekannter Herkunft, unvollständigem Journal oder unbekannten Boost-/Stärkedaten. Ein leeres Herkunftsei-Menü lässt nichts verkaufen. Bitte vor Aktivierung die Vorschau prüfen.
+
+Der echte native Spielbefehl `SellPet` mit der individuellen `itemId` ist aus dem aktuellen öffentlichen Aries-Quellcode bestätigt. **Er gibt nicht immer eine Befehlsbestätigung zurück.** Die AutoFarm prüft deshalb nach dem Senden, ob das exakte Pet aus deinem Inventar verschwunden ist, und wiederholt ausbleibende/unklare Verkäufe **nicht blind** (10 Minuten Sperre). Ein sicherer Live-Verkauf wurde bisher **nicht** mit deinem Spielaccount geprüft.
+
+**Aries-Team-Verwaltung (standardmäßig AUS):** Arie's Mod gibt gespeicherte Teams über `window.QWS_PetsService.getTeams()` sowie `saveTeam()` frei. Wenn Aries läuft und sein Team-Sync aktiviert ist, kannst du ein **bereits gespeichertes und mit dem Spiel verknüpftes Aries-Team** auswählen und dessen Ziel (AFK, Verkauf, Growth, Hatch usw.) festlegen. Nur dieses ausdrücklich registrierte Team darf die AutoFarm mit den besten Pet-IDs aus ihrer Max-STR-/Boost-Analyse aktualisieren. **Manuell erstellte, nicht ausgewählte Teams bleiben unverändert.** Es werden weder Aries-Teams gelöscht noch automatisch erstellt. Teamnamen und Team-IDs bleiben gleich.
+
+**Wichtige Grenze:** Aries' noch **nicht gespeicherte** Team-Builder-Vorschläge sind derzeit nicht als öffentliches API verfügbar. Diese Version **importiert also gespeicherte Aries-Teams**, verwendet für bessere Mitglieder aber unsere **eigene** geprüfte Max-Level-Optimierung statt heimlich Aries' Algorithmus zu behaupten oder fremden proprietären Code zu kopieren. Für exakt dieselben Builder-Vorschläge bräuchten wir eine offizielle Bridge/API von Arie.
+
+**Aktivierung:** Automationszentrale und AutoFarm starten, im Pet-Menü die Schutz-/Verkaufsoptionen ausdrücklich aktivieren. Ohne aktive AutoFarm werden keine Aktionen gesendet.
 
 ## Smart Pet Advisor (V15.3.1)
 
