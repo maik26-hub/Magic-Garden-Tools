@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         Magic Garden AutoFarm
 // @namespace    mg-autofarm-local
-// @version      15.2.0
+// @version      15.2.1
 // @updateURL   https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js
 // @downloadURL https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js
-// @description  V15.2: colored plant/egg field roles and catalog menus without manual IDs
+// @description  V15.2.1: reliable live catalog discovery and Auto-Buy without daily budget or coin reserve
 // @match        https://magicgarden.gg/*
 // @run-at       document-start
 // @grant        none
@@ -13,13 +13,225 @@
 (() => {
   "use strict";
 
+/** Own-game catalog discovery. No pinned chunk name, external catalogs or eval.
+ * Resource observation starts at document-start; missing timing entries are
+ * recovered from the page's module scripts/preloads and their ESM dependencies.
+ */
+function identifyNativeCatalogs(exports) {
+  const object = value => value && typeof value === 'object' && !Array.isArray(value);
+  const finite = value => typeof value === 'number' && Number.isFinite(value);
+  const out = {}, seen = new Set();
+  function inspect(value, depth) {
+    if (!object(value) || seen.has(value) || seen.size >= 8192) return;
+    seen.add(value);
+    const before = Object.keys(out).length;
+    if (object(value.Carrot?.seed) && finite(value.Carrot?.crop?.baseSellPrice)) out.plants = value;
+    if (Array.isArray(value.Worm?.diet) && (finite(value.Worm.coinsToFullyReplenishHunger) || finite(value.Worm.maxHunger))) out.pets = value;
+    if (finite(value.CommonEgg?.secondsToHatch) && (finite(value.CommonEgg.coinPrice) || object(value.CommonEgg.faunaSpawnWeights))) out.eggs = value;
+    if (finite(value.WateringCan?.coinPrice) && object(value.Camera)) out.tools = value;
+    if (finite(value.Gold?.coinMultiplier) && typeof value.Gold.group === 'string' && object(value.Wet)) out.mutations = value;
+    if (object(value.SeedSilo) && object(value.FeedingTrough) && finite(value.FeedingTrough.coinPrice)) out.decor = value;
+    if (Object.keys(out).length > before) return;
+    // Module namespaces can export hundreds of symbols. Do not stop before
+    // late alphabetically-named catalog exports or recurse into catalog rows.
+    // Module namespaces, default-export containers, and canonical category maps.
+    if (depth < 2) {
+      for (const child of Object.values(value).slice(0, depth === 0 ? 4096 : 128)) {
+        if (object(child)) inspect(child, depth + 1);
+      }
+    }
+  }
+  inspect(exports, 0);
+  return out;
+}
+
+function createNativeCatalogSource(env) {
+  'use strict';
+  const limit = { urls: 192, sourceBytes: 4 * 1024 * 1024, totalBytes: 24 * 1024 * 1024, readsPerPass: 12, fetchMs: 5000, importMs: 6000 };
+  const now = env.now || (() => Date.now());
+  const resources = new Map(), imported = new Map(), catalogData = {};
+  let observer = null, flight = null, totalBytes = 0, release = '', issue = '', stopped = false;
+  const groups = ['plants', 'pets', 'eggs', 'tools', 'mutations', 'decor'];
+  const full = () => groups.every(group => catalogData[group]);
+  function context() {
+    try {
+      const page = new URL(env.pageURL());
+      let current = String(env.release?.() || '');
+      if (!/^\d+$/.test(current)) current = '';
+      return { page, current };
+    } catch { return null; }
+  }
+  function normalize(value, base) {
+    const c = context();
+    if (!c || typeof value !== 'string' || value.length > 1500) return null;
+    try {
+      let reference = value;
+      // Vite dependency arrays use "assets/X.js" relative to the release root,
+      // whereas ordinary static imports use "./X.js" relative to the module.
+      if (base && /^assets\//.test(reference)) reference = '../' + reference;
+      const url = new URL(reference, base || c.page.href);
+      if (url.origin !== c.page.origin || !/^https?:$/.test(url.protocol) || url.username || url.password) return null;
+      if (!/^\/(?:version\/\d+\/)?assets\/[A-Za-z0-9_./-]+\.m?js$/.test(url.pathname)) return null;
+      const version = url.pathname.match(/^\/version\/(\d+)\//)?.[1];
+      if (version && c.current && version !== c.current) return null;
+      url.hash = '';
+      return url.href;
+    } catch { return null; }
+  }
+  function remember(value, base, discovered = false) {
+    const url = normalize(value, base);
+    if (!url || resources.has(url) || resources.size >= limit.urls) return;
+    resources.set(url, { url, read: false, retryAt: 0, candidate: false, discovered });
+  }
+  function collect() {
+    const c = context();
+    if (!c) return;
+    if (c.current && release && c.current !== release) {
+      resources.clear(); imported.clear();
+      for (const key of Object.keys(catalogData)) delete catalogData[key];
+      totalBytes = 0;
+    }
+    if (c.current) release = c.current;
+    try { for (const e of env.performance?.getEntriesByType?.('resource') || []) remember(e.name); } catch { /* timing buffer may be unavailable */ }
+    try {
+      for (const node of env.document?.querySelectorAll?.('script[src],link[rel~="modulepreload"][href]') || []) {
+        remember(node.src || node.href || node.getAttribute?.('src') || node.getAttribute?.('href'));
+      }
+    } catch { /* document may not be ready at document-start */ }
+  }
+  function references(text, base) {
+    // Read references, never execute/rewrite source. Accept only own asset URLs.
+    const rx = /["'`]((?:\.{1,2}\/|\/version\/\d+\/assets\/|\/assets\/|assets\/)[^"'`\s]+\.m?js(?:\?[^"'`\s]*)?)["'`]/g;
+    for (const match of text.matchAll(rx)) remember(match[1], base, true);
+  }
+  function containsCatalogData(text) {
+    const signals = [
+      /\bbaseSellPrice\b/.test(text) && /\bmaxSizeMultiplier\b/.test(text),
+      /\bsecondsToHatch\b/.test(text) && /\bfaunaSpawnWeights\b/.test(text),
+      /\bcoinsToFullyReplenishHunger\b/.test(text) && /\bdiet\b/.test(text),
+      /\bcoinMultiplier\b/.test(text) && /\bGrowth\b/.test(text),
+      /\bWateringCan\b/.test(text) && /\bcoinPrice\b/.test(text),
+      /\bFeedingTrough\b/.test(text) && /\bcoinPrice\b/.test(text)
+    ];
+    return signals.some(Boolean) && /\bexport\b/.test(text);
+  }
+  function priority(item) {
+    // Hints only. A new/renamed bundle is still found through source markers.
+    if (item.candidate) return 0;
+    if (/BakedRoundedRect|catalog|Catalog|[Pp]lants|[Ee]ggs/.test(item.url)) return 1;
+    if (/\/Boot-|\/index-|\/bootScreen-|\/QuinoaCanvas-|\/main-/.test(item.url)) return 2;
+    return item.discovered ? 3 : 4;
+  }
+  async function boundedText(response) {
+    if (!response.ok) throw new Error('Katalog-Datei vorübergehend nicht erreichbar');
+    const length = Number(response.headers?.get?.('content-length'));
+    if (Number.isFinite(length) && length > limit.sourceBytes) throw new Error('Katalog-Datei überschreitet Leselimit');
+    // Bound streamed reads as well as decompressed bodies.
+    if (response.body?.getReader && typeof TextDecoder === 'function') {
+      const reader = response.body.getReader(), decoder = new TextDecoder();
+      let bytes = 0, text = '';
+      try {
+        while (true) {
+          const chunk = await reader.read(); if (chunk.done) break;
+          bytes += chunk.value.byteLength;
+          if (bytes > limit.sourceBytes) { await reader.cancel(); throw new Error('Katalog-Datei überschreitet Leselimit'); }
+          text += decoder.decode(chunk.value, { stream: true });
+        }
+        return text + decoder.decode();
+      } finally { reader.releaseLock(); }
+    }
+    const text = await response.text();
+    if (text.length > limit.sourceBytes) throw new Error('Katalog-Datei überschreitet Leselimit');
+    return text;
+  }
+  async function readModule(item) {
+    let timer = null;
+    const controller = new AbortController();
+    try {
+      // The race bounds stalled streams too. Never add credentials or use the
+      // WebSocket URL (which contains private room/auth data) as a fetch target.
+      return await Promise.race([
+        (async () => {
+          const response = await env.fetch(item.url, { credentials: 'omit', mode: 'same-origin', cache: 'force-cache', signal: controller.signal, redirect: 'error' });
+          if (response.url && normalize(response.url) !== item.url) throw new Error('Unerwartete Katalog-Weiterleitung');
+          return boundedText(response);
+        })(),
+        new Promise((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error('Katalogabruf dauert zu lange')); }, env.fetchTimeoutMs || limit.fetchMs); })
+      ]);
+    } finally { if (timer !== null) clearTimeout(timer); }
+  }
+  async function importCatalog(item) {
+    let promise = imported.get(item.url);
+    if (!promise) {
+      const requestRelease = release;
+      promise = Promise.resolve().then(() => env.importModule(item.url)).then(exports => {
+        if (requestRelease === release && !stopped) Object.assign(catalogData, identifyNativeCatalogs(exports));
+        return exports;
+      });
+      // No duplicated imports while a prior asynchronous module is pending.
+      imported.set(item.url, promise);
+      promise.catch(() => { if (imported.get(item.url) === promise) imported.delete(item.url); });
+    }
+    let timer = null;
+    try {
+      await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Spielmodul noch nicht bereit')), env.importTimeoutMs || limit.importMs); })]);
+    } finally { if (timer !== null) clearTimeout(timer); }
+  }
+  async function pass() {
+    collect();
+    if (full()) return { ...catalogData };
+    const started = now();
+    let reads = 0;
+    while (!stopped && !full() && reads < limit.readsPerPass && now() - started < 10000) {
+      const item = [...resources.values()].filter(i => (!i.read || i.candidate) && i.retryAt <= now() && normalize(i.url)).sort((a,b) => priority(a) - priority(b))[0];
+      if (!item) break;
+      try {
+        if (!item.read) {
+          if (totalBytes >= limit.totalBytes) { issue = 'Katalogsuche begrenzt; auf weitere Spieldaten warten'; break; }
+          const text = await readModule(item); reads++;
+          totalBytes += text.length; item.read = true;
+          references(text, item.url);
+          item.candidate = containsCatalogData(text);
+        }
+        if (item.candidate) {
+          await importCatalog(item);
+          item.candidate = false;
+        }
+        issue = '';
+      } catch (error) {
+        item.retryAt = now() + 10000;
+        reads++;
+        issue = String(error?.message || 'Katalogquelle noch nicht bereit').slice(0, 120);
+      }
+    }
+    if (full()) issue = '';
+    return { ...catalogData };
+  }
+  function load() {
+    if (stopped) return Promise.resolve({ ...catalogData });
+    if (!flight) flight = pass().finally(() => { flight = null; });
+    return flight;
+  }
+  function diagnostics() { return { release, ready: Object.keys(catalogData), resources: resources.size, issue, loading: !!flight }; }
+  function dispose() { stopped = true; observer?.disconnect(); }
+  try {
+    if (typeof env.PerformanceObserver === 'function') {
+      observer = new env.PerformanceObserver(list => { for (const entry of list.getEntries()) remember(entry.name); });
+      observer.observe({ type: 'resource', buffered: true });
+    }
+  } catch { observer = null; }
+  collect();
+  return { load, diagnostics, dispose };
+}
+
+
 /* Native command shapes verified against public game build 1517.
  * Original implementation. The caller owns the only execution loop. */
 function createAutomationCore(env) {
   'use strict';
   const KEY='magic_garden_automation_v15', LEDGER='magic_garden_purchase_budget_v15', RECEIPTS='magic_garden_action_receipts_v15';
   const names={favorite:'Wertschutz / Favoriten',journal:'Journal',feed:'Pets füttern',trough:'Futtertrog',claims:'Quest-Belohnungen',hatch:'Eier ausbrüten',plant:'Nachpflanzen',eggs:'Eier nachlegen',water:'Gießen',storage:'Lager',teams:'Wetter-Petteams',buy:'Shop-Einkauf'};
-  const defaults={enabled:false,favorite:false,journal:false,feed:false,trough:false,claims:false,hatch:false,plant:false,eggs:false,water:false,storage:false,teams:false,buy:false,seedSpecies:'',eggId:'',hungerPercent:30,foodMaxValue:1000,troughItems:5,toolReserve:2,waterMinSeconds:600,keepValue:0,keepSpecies:[],minHarvestSize:0,minHarvestValue:0,wantedMutations:[],pauseWeather:[],dailyBudget:0,coinReserve:100000,buyRules:[],teamRules:[],actionIntervalMs:900};
+  const defaults={enabled:false,favorite:false,journal:false,feed:false,trough:false,claims:false,hatch:false,plant:false,eggs:false,water:false,storage:false,teams:false,buy:false,seedSpecies:'',eggId:'',hungerPercent:30,foodMaxValue:1000,troughItems:5,toolReserve:2,waterMinSeconds:600,keepValue:0,keepSpecies:[],minHarvestSize:0,minHarvestValue:0,wantedMutations:[],pauseWeather:[],buyRules:[],teamRules:[],actionIntervalMs:900};
   const arr=v=>Array.isArray(v)?v:[],num=v=>typeof v==='number'&&Number.isFinite(v),str=v=>typeof v==='string'&&v.length>0&&v.length<120,obj=v=>v&&typeof v==='object'&&!Array.isArray(v);
   const cleanList=v=>[...new Set(arr(v).filter(str))].slice(0,40);
   const bounded=(v,f,min,max)=>num(v)?Math.min(max,Math.max(min,Math.round(v))):f;
@@ -30,13 +242,13 @@ function createAutomationCore(env) {
     for(const key of ['enabled',...Object.keys(names)])out[key]=v[key]===true;
     for(const key of ['seedSpecies','eggId'])out[key]=str(v[key])?v[key]:'';
     for(const key of ['keepSpecies','wantedMutations','pauseWeather'])out[key]=cleanList(v[key]);
-    const ranges={hungerPercent:[1,90],foodMaxValue:[1,1e9],troughItems:[0,50],toolReserve:[0,99],waterMinSeconds:[30,86400],keepValue:[0,1e12],minHarvestSize:[0,100],minHarvestValue:[0,1e12],dailyBudget:[0,1e12],coinReserve:[0,1e12],actionIntervalMs:[500,10000]};
+    const ranges={hungerPercent:[1,90],foodMaxValue:[1,1e9],troughItems:[0,50],toolReserve:[0,99],waterMinSeconds:[30,86400],keepValue:[0,1e12],minHarvestSize:[0,100],minHarvestValue:[0,1e12],actionIntervalMs:[500,10000]};
     for(const [key,limits]of Object.entries(ranges))out[key]=bounded(v[key],defaults[key],...limits);
     const shops=['seed','egg','tool','decor','rain','dawn','amber','snow','thunder','apology'];
     out.buyRules=arr(v.buyRules).filter(r=>obj(r)&&['Seed','Egg','Tool','Decor'].includes(r.type)&&str(r.id)&&shops.includes(r.shop)).slice(0,30).map(r=>({type:r.type,id:r.id,shop:r.shop,maxPrice:bounded(r.maxPrice,0,0,1e12),perRestock:bounded(r.perRestock,1,1,100),maxOwned:bounded(r.maxOwned,10,1,10000)}));
     out.teamRules=arr(v.teamRules).filter(r=>obj(r)&&str(r.weather)&&str(r.teamId)).slice(0,15).map(r=>({weather:r.weather,teamId:r.teamId}));return out;
   }
-  let config=normalize(read(KEY,{})),catalogs={},catalogMessage='Warte auf Spielkataloge',loading=false,nextCatalogAt=0,lastActionAt=-Infinity,busy=false,lastModule='',runGeneration=0;
+  let config=normalize(read(KEY,{})),catalogs={},catalogMessage='Warte auf Spielkataloge',loading=false,nextCatalogAt=0,catalogFailures=0,lastActionAt=-Infinity,busy=false,lastModule='',runGeneration=0;
   const counts=Object.fromEntries(Object.keys(names).map(k=>[k,0])),reasons={},events=[],receipts=new Map();
   for(const r of arr(read(RECEIPTS,[])).slice(-200))if(obj(r)&&typeof r.key==='string'&&r.key.length<400&&num(r.until)&&r.until>env.now()&&typeof r.fp==='string')receipts.set(r.key,r);
   const now=()=>env.now();
@@ -57,16 +269,34 @@ function createAutomationCore(env) {
   function quantity(i){return Number.isInteger(i?.quantity)&&i.quantity>=0?i.quantity:(['Produce','Pet','Plant'].includes(i?.itemType)?1:0);}
   function total(s,type,id,withStorage=false){const list=withStorage?[...s.inventory.items,...arr(s.inventory.storages).flatMap(st=>arr(st.items))]:s.inventory.items;return list.filter(i=>i?.itemType===type&&kindId(i)===id).reduce((sum,i)=>sum+quantity(i),0);}
   function catalogFor(type,id){if(type==='Seed')return catalogs.plants?.[id]?.seed;return catalogs[{Egg:'eggs',Tool:'tools',Decor:'decor'}[type]]?.[id];}
-  function extractCatalogs(exports){const result={};for(const v of Object.values(exports||{})){
-    if(!obj(v))continue;
-    if(v.Carrot?.seed&&v.Carrot?.crop&&num(v.Carrot.crop.baseSellPrice))result.plants=v;
-    if(Array.isArray(v.Worm?.diet)&&(num(v.Worm?.coinsToFullyReplenishHunger)||num(v.Worm?.maxHunger)))result.pets=v;
-    if(num(v.CommonEgg?.secondsToHatch)&&num(v.CommonEgg?.coinPrice))result.eggs=v;
-    if(num(v.WateringCan?.coinPrice)&&v.Camera)result.tools=v;
-    if(num(v.Gold?.coinMultiplier)&&v.Gold?.group&&v.Wet)result.mutations=v;
-    if(obj(v.SeedSilo)&&obj(v.FeedingTrough)&&num(v.FeedingTrough.coinPrice))result.decor=v;
-  }return result;}
-  async function loadCatalogs(){if(loading||now()<nextCatalogAt)return;nextCatalogAt=now()+30000;loading=true;try{const exports=await env.loadCatalogs();catalogs={...catalogs,...extractCatalogs(exports)};catalogMessage=Object.keys(catalogs).length?'Erkannt: '+Object.keys(catalogs).join(', '):'Spielkatalog noch nicht verfügbar';}catch{catalogMessage='Spielkatalog noch nicht verfügbar';}finally{loading=false;}}
+  function extractCatalogs(exports) {
+    const identify = typeof identifyNativeCatalogs === 'function'
+      ? identifyNativeCatalogs : require('./catalog-source.js').identifyNativeCatalogs;
+    return identify(exports);
+  }
+  async function loadCatalogs(force = false) {
+    if (loading || (!force && now() < nextCatalogAt)) return;
+    loading = true;
+    catalogMessage = Object.keys(catalogs).length ? 'Spielkataloge werden ergänzt …' : 'Spielkataloge werden geladen …';
+    try {
+      const exports = await env.loadCatalogs();
+      const found = extractCatalogs(exports);
+      catalogs = {...catalogs, ...found};
+      const keys = Object.keys(catalogs);
+      const names = {plants:'Pflanzen',eggs:'Eier',pets:'Pets',tools:'Werkzeuge',decor:'Dekoration',mutations:'Mutationen'};
+      const all = keys.length >= 6;
+      catalogMessage = keys.length ? 'Geladen: ' + keys.map(k=>names[k]||k).join(', ') : 'Suche aktuelle Spielkataloge – automatischer Neuversuch';
+      catalogFailures = all ? 0 : Math.min(catalogFailures + 1, 3);
+      nextCatalogAt = now() + (all ? 300000 : [2000,2000,5000,10000][catalogFailures]);
+    } catch {
+      catalogFailures = Math.min(catalogFailures + 1, 3);
+      catalogMessage = 'Spielkatalog noch nicht erreichbar – automatischer Neuversuch';
+      nextCatalogAt = now() + [2000,2000,5000,10000][catalogFailures];
+    } finally {
+      loading = false;
+      try { env.onCatalogsChanged?.(); } catch { /* UI must not break catalog recovery */ }
+    }
+  }
   function produceValue(i){const crop=catalogs.plants?.[i?.species]?.crop;if(!crop||!num(crop.baseSellPrice)||!num(crop.maxSizeMultiplier)||!num(i.size)||!Array.isArray(i.mutations))return null;let growth=1,additive=1,seenGrowth=false;for(const id of new Set(i.mutations)){const m=catalogs.mutations?.[id];if(!m||!num(m.coinMultiplier))return null;if(m.group==='Growth'){if(seenGrowth)return null;growth=m.coinMultiplier;seenGrowth=true;}else additive+=m.coinMultiplier-1;}const size=1+(crop.maxSizeMultiplier-1)*(Math.min(100,Math.max(50,i.size))-50)/50;return Math.round(crop.baseSellPrice*size*growth*additive);}
   function nativeFavorite(s,i){return s.inventory.favoritedItemIds.includes(itemKey(i));}
   function keepItem(s,i){if(nativeFavorite(s,i)||env.protected({},i))return true;if(config.keepSpecies.includes(i.species))return true;if(config.keepValue>0){const v=produceValue(i);return v===null||v>=config.keepValue;}return false;}
@@ -92,17 +322,17 @@ function createAutomationCore(env) {
   function planHatch(s){if(s.inventory.items.length>=98){reasons.hatch='Mindestens zwei freie Inventarplätze benötigt';return null;}for(const tile of plots(s,'egg')){const e=s.garden[tile];if(e?.objectType==='egg'&&num(e.maturedAt)&&e.maturedAt<=s.serverNow)return job('hatch','hatch:'+tile,e.eggId+':'+e.plantedAt,{type:'HatchEgg',slot:tile},n=>n.garden[tile]?.objectType!=='egg'||n.garden[tile]?.plantedAt!==e.plantedAt,5000);}return null;}
   function getStack(s,type,id){return s.inventory.items.find(i=>i?.itemType===type&&kindId(i)===id&&quantity(i)>0&&!nativeFavorite(s,i));}
   function retrieveStack(s,type,id,reserve=0){if(s.inventory.items.length>=99)return null;const storageId={Seed:'SeedSilo',Tool:'ToolShack'}[type],st=storageFor(s,storageId),i=arr(st?.items).find(i=>i?.itemType===type&&kindId(i)===id&&quantity(i)>reserve&&!nativeFavorite(s,i));return i?{item:i,storageId,qty:1}:null;}
-  function planPlant(s){const species=config.seedSpecies;if(!species){reasons.plant='Saatgut auswählen';return null;}if(!catalogs.plants?.[species]){reasons.plant='Pflanzenkatalog / Saatgut unbekannt';return null;}const tile=plots(s,'plant').find(t=>s.garden[t]==null);if(tile===undefined)return null;const seed=getStack(s,'Seed',species);if(!seed){const st=retrieveStack(s,'Seed',species);if(!st){reasons.plant='Kein freigegebenes Saatgut';return null;}return job('plant','retrieve:seed:'+species,String(quantity(st.item)),{type:'MoveItem',from:st.storageId,to:'inventory',itemId:itemKey(st.item),quantity:1},n=>total(n,'Seed',species)>0,2000);}return job('plant','plant:'+tile,species+':'+quantity(seed),{type:'PlantSeed',slot:tile,species},n=>n.garden[tile]?.objectType==='plant',2500);}
-  function planEggs(s){const id=config.eggId;if(!id||!catalogs.eggs?.[id]){reasons.eggs='Ei auswählen / Eierkatalog fehlt';return null;}const tile=plots(s,'egg').find(t=>s.garden[t]==null);if(tile===undefined)return null;const e=getStack(s,'Egg',id);if(!e){reasons.eggs='Kein freigegebenes Ei';return null;}return job('eggs','growegg:'+tile,id+':'+quantity(e),{type:'GrowEgg',slot:tile,eggId:id},n=>n.garden[tile]?.objectType==='egg',3000);}
+  function planPlant(s){const species=config.seedSpecies;if(!species){reasons.plant='Saatgut auswählen';return null;}const tile=plots(s,'plant').find(t=>s.garden[t]==null);if(tile===undefined)return null;const seed=getStack(s,'Seed',species);if(!seed){const st=retrieveStack(s,'Seed',species);if(!st){reasons.plant='Kein freigegebenes Saatgut';return null;}return job('plant','retrieve:seed:'+species,String(quantity(st.item)),{type:'MoveItem',from:st.storageId,to:'inventory',itemId:itemKey(st.item),quantity:1},n=>total(n,'Seed',species)>0,2000);}return job('plant','plant:'+tile,species+':'+quantity(seed),{type:'PlantSeed',slot:tile,species},n=>n.garden[tile]?.objectType==='plant',2500);}
+  function planEggs(s){const id=config.eggId;if(!id){reasons.eggs='Ei auswählen';return null;}const tile=plots(s,'egg').find(t=>s.garden[t]==null);if(tile===undefined)return null;const e=getStack(s,'Egg',id);if(!e){reasons.eggs='Kein freigegebenes Ei';return null;}return job('eggs','growegg:'+tile,id+':'+quantity(e),{type:'GrowEgg',slot:tile,eggId:id},n=>n.garden[tile]?.objectType==='egg',3000);}
   function planWater(s){const can=getStack(s,'Tool','WateringCan');if(!can||quantity(can)<=config.toolReserve){reasons.water='Gießkannen-Reserve erreicht';return null;}for(const tile of plots(s,'plant')){const p=s.garden[tile];if(p?.objectType!=='plant'||arr(p.slots).some(c=>env.protected(p,c)))continue;const times=arr(p.slots).map(c=>c.endTime).filter(num);if(!times.length||Math.min(...times)-s.serverNow<config.waterMinSeconds*1000)continue;return job('water','water:'+tile,String(p.plantedAt),{type:'WaterPlant',slot:tile},n=>total(n,'Tool','WateringCan')<quantity(can),300000);}return null;}
   function planStorage(s){for(const i of s.inventory.items){const type=i?.itemType,id=kindId(i),key=itemKey(i),to={Seed:'SeedSilo',Tool:'ToolShack',Decor:'DecorShed'}[type];if(!to||!str(key)||nativeFavorite(s,i)||i.remainingActiveSeconds>0)continue;if(type==='Seed'&&config.plant&&id===config.seedSpecies)continue;if(type==='Tool'&&['Camera','WateringCan'].includes(id))continue;if(s.heldId===key)continue;const st=storageFor(s,to),same=arr(st?.items).find(x=>x?.itemType===type&&itemKey(x)===key);if(!same||quantity(i)<=0)continue;const limit=catalogFor(type,id)?.maxInventoryQuantity,qty=num(limit)?Math.min(quantity(i),Math.max(0,limit-quantity(same))):quantity(i);if(qty<=0)continue;return job('storage','store:'+key,quantity(i)+':'+quantity(same),{type:'MoveItem',from:'inventory',to,itemId:key,quantity:qty},n=>total(n,type,id)<total(s,type,id),3000);}return null;}
   function planTeams(s){const r=config.teamRules.find(r=>r.weather===weather(s));if(!r){reasons.teams='Keine Regel für aktuelles Wetter';return null;}const team=arr(s.own.petTeams).find(t=>t?.id===r.teamId),ids=arr(team?.members).map(m=>m.petId).filter(str).sort();if(!team||!ids.length)return null;const active=arr(s.own.petSlots).map(p=>p.id).filter(str).sort();if(JSON.stringify(ids)===JSON.stringify(active))return null;if(s.inventory.items.length>=95){reasons.teams='Inventar zu voll für Teamwechsel';return null;}return job('teams','team:'+r.teamId,weather(s)+':'+active.join(','),{type:'ApplyPetTeam',teamId:r.teamId},n=>JSON.stringify(arr(n.own.petSlots).map(p=>p.id).sort())===JSON.stringify(ids),60000);}
   function ledger(s){const day=new Date(s.serverNow).toISOString().slice(0,10),key=LEDGER+':'+day,stored=read(key,{spent:0,counts:{},inflight:null});if(!obj(stored)||!num(stored.spent)||stored.spent<0||!obj(stored.counts))return null;return {key,day,data:stored};}
   function planBuy(s){
-    if(!config.dailyBudget||!config.buyRules.length){reasons.buy='Auswahlliste und Tagesbudget festlegen';return null;}
+    if(!config.buyRules.length){reasons.buy='Artikel auswählen und Kaufregel speichern';return null;}
     if(!num(s.own.coinsCount)||s.inventory.items.length>=98){reasons.buy='Coins / Inventarplatz nicht sicher';return null;}
     if(!obj(s.own.shopPurchases)){reasons.buy='Kaufzähler noch nicht geladen';return null;}
-    const budget=ledger(s);if(!budget){reasons.buy='Budgetdaten beschädigt – Käufe gesperrt';return null;}
+    const budget=ledger(s);if(!budget){reasons.buy='Kaufstatus beschädigt – Käufe pausiert';return null;}
     if(budget.data.inflight){const p=budget.data.inflight,observed=s.own.shopPurchases?.[p.shop];if(observed?.restockId===p.restockId&&num(observed?.purchases?.[p.id])&&observed.purchases[p.id]>p.beforeCount){budget.data.inflight=null;if(!write(budget.key,budget.data))return null;}else{reasons.buy='Vorheriger Kauf noch nicht im Spielzustand bestätigt';return null;}}
     for(const r of config.buyRules){
       const shop=s.game.shops?.[r.shop];if(!shop||!Array.isArray(shop.inventory)||!str(shop.restockId)||!num(shop.deadlineMs)||shop.deadlineMs<=s.serverNow)continue;
@@ -117,7 +347,7 @@ function createAutomationCore(env) {
       if(stock.initialStock-(purchased||0)<=0)continue;
       const token=r.shop+':'+shop.restockId+':'+r.type+':'+r.id;
       if((budget.data.counts[token]||0)>=r.perRestock)continue;
-      if(budget.data.spent+price>config.dailyBudget||s.own.coinsCount-price<config.coinReserve){reasons.buy='Budget / Coin-Reserve erreicht';continue;}
+      if(s.own.coinsCount<price){reasons.buy='Nicht genug Coins für diesen Artikel';continue;}
       const item={itemType:r.type,[{Seed:'species',Egg:'eggId',Tool:'toolId',Decor:'decorId'}[r.type]]:r.id};
       const j=job('buy','buy:'+token,String(purchased||0),{type:'PurchaseShopItem',shop:r.shop,viewMode:'list',item,quantity:1},n=>{const p=n.own.shopPurchases?.[r.shop];return p?.restockId===shop.restockId&&(p.purchases?.[r.id]||0)>(purchased||0);},5000);
       if(j)j.purchase={key:budget.key,token,price,coins:s.own.coinsCount,shop:r.shop,restockId:shop.restockId,id:r.id,beforeCount:purchased||0};return j;
@@ -133,7 +363,7 @@ function createAutomationCore(env) {
     const record={key:latest.key,kind:latest.module,fp:latest.fp,status:'pending',until:latest.module==='favorite'?Number.MAX_SAFE_INTEGER:now()+600000,after:now()+latest.cooldown};
     receipts.set(latest.key,record);
     if(!persistReceipts()){receipts.delete(latest.key);reasons[latest.module]='Speicher voll – Aktion gesperrt';return false;}
-    if(latest.purchase){const b=ledger(fresh);if(!b)return false;const p=latest.purchase;if(b.key!==p.key||b.data.inflight||b.data.spent+p.price>config.dailyBudget||fresh.own.coinsCount-p.price<config.coinReserve)return false;b.data.spent+=p.price;b.data.counts[p.token]=(b.data.counts[p.token]||0)+1;b.data.inflight={shop:p.shop,restockId:p.restockId,id:p.id,beforeCount:p.beforeCount,coinsBefore:fresh.own.coinsCount,price:p.price};if(!write(b.key,b.data)){reasons.buy='Budget nicht speicherbar – Kauf gesperrt';return false;}}
+    if(latest.purchase){const b=ledger(fresh);if(!b)return false;const p=latest.purchase;if(b.key!==p.key||b.data.inflight||fresh.own.coinsCount<p.price)return false;b.data.spent+=p.price;b.data.counts[p.token]=(b.data.counts[p.token]||0)+1;b.data.inflight={shop:p.shop,restockId:p.restockId,id:p.id,beforeCount:p.beforeCount,coinsBefore:fresh.own.coinsCount,price:p.price};if(!write(b.key,b.data)){reasons.buy='Kaufstatus nicht speicherbar – Kauf pausiert';return false;}}
     lastActionAt=now();lastModule=latest.module;
     try{const response=await env.send(latest.command);if(response?.ok!==true)throw new Error('Aktion nicht bestätigt');counts[latest.module]++;record.status='confirmed';record.until=latest.module==='favorite'?Number.MAX_SAFE_INTEGER:now()+600000;event(latest.module,'Bestätigt');reasons[latest.module]='Bestätigt; warte auf Zustandsänderung';if(latest.module==='favorite')record.after=now()+600000;if(latest.effect&&latest.module!=='favorite'){const updated=snapshot();if(updated&&latest.effect(updated))record.until=Math.max(record.after,now()+500);}}
     catch(error){record.status='uncertain';record.until=latest.module==='favorite'?Number.MAX_SAFE_INTEGER:now()+600000;reasons[latest.module]=latest.module==='favorite'?'Unklar – Favoriten-Toggle wird nicht wiederholt':'Nicht bestätigt – 10 Minuten kein Wiederholen';event(latest.module,'Abgelehnt / unbekannt; geschützt pausiert');}
@@ -141,7 +371,7 @@ function createAutomationCore(env) {
   }
   async function step(){if(!config.enabled||!env.running()||busy)return false;void loadCatalogs();if(now()-lastActionAt<config.actionIntervalMs)return false;const s=snapshot();if(!s)return false;const candidate=selectedJob(s);if(!candidate)return false;busy=true;const generation=runGeneration;try{if(candidate.module==='buy'){if(typeof env.withPurchaseLock!=='function'){reasons.buy='Browser-Kaufsperre nicht verfügbar';return false;}return await env.withPurchaseLock(s.actor,async()=>generation===runGeneration&&env.running()?execute(candidate,s):false);}return await execute(candidate,s);}finally{busy=false;}}
   function preview(){const s=snapshot();return s?candidates(s).map(j=>({module:j.module,action:j.command.type})):[];}
-  function status(){const s=snapshot(),b=s?ledger(s):null;return {enabled:config.enabled,busy,catalogs:catalogMessage,weather:s?weather(s):'unbekannt',spentToday:b?.data.spent??0,budget:config.dailyBudget,queue:preview(),modules:Object.entries(names).map(([id,label])=>({id,label,on:config[id],confirmed:counts[id],status:reasons[id]||'Warte'})),sell:reasons.sell||'',quests:arr(s?.own.dailyQuests?.quests).map(q=>({kind:q.objective?.kind||'unknown',progress:q.progress,target:q.objective?.target,claimed:num(q.claimedAt)})),events:events.slice(-10)};}
+  function status(){const s=snapshot(),b=s?ledger(s):null;return {enabled:config.enabled,busy,catalogs:catalogMessage,weather:s?weather(s):'unbekannt',spentToday:b?.data.spent??0,catalogSource:env.catalogDiagnostics?.()||null,queue:preview(),modules:Object.entries(names).map(([id,label])=>({id,label,on:config[id],confirmed:counts[id],status:reasons[id]||'Warte'})),sell:reasons.sell||'',quests:arr(s?.own.dailyQuests?.quests).map(q=>({kind:q.objective?.kind||'unknown',progress:q.progress,target:q.objective?.target,claimed:num(q.claimedAt)})),events:events.slice(-10)};}
   // Human-readable menus retain native IDs internally. Missing catalogs never
   // become free-text inputs or guessed purchase commands.
   function menuChoices() {
@@ -149,18 +379,32 @@ function createAutomationCore(env) {
     const human = value => String(value || '').replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_-]+/g,' ').trim();
     const shopNames = {seed:'Saatgutladen',egg:'Eierladen',tool:'Werkzeugladen',decor:'Dekoladen',rain:'Regen-Shop',dawn:'Morgenrot-Shop',amber:'Bernsteinmond-Shop',snow:'Frost-Shop',thunder:'Gewitter-Shop',apology:'Entschädigungs-Shop'};
     const weatherNames = {Normal:'Kein Spezialwetter',Rain:'Regen',Frost:'Frost',Thunderstorm:'Gewitter',Dawn:'Morgenrot',AmberMoon:'Bernsteinmond'};
-    const catalogList = (type, source) => Object.entries(source || {}).map(([id, record]) => {
-      const c = type === 'Seed' ? record.seed : record;
-      const shops = arr(c?.eligibleShops).filter(x=>Object.hasOwn(shopNames,x));
-      return {id, name: record.name || c?.name || human(id), price:num(c?.coinPrice)?c.coinPrice:null,
-        shops, owned:s?total(s,type,id,true):null,
-        stock: shops.map(shopId=>{
-          const sh=s?.game.shops?.[shopId], row=arr(sh?.inventory).find(i=>i?.itemType===type&&kindId(i)===id);
-          const purchased=s?.own.shopPurchases?.[shopId];
-          const used=purchased?.restockId===sh?.restockId ? purchased?.purchases?.[id]||0 : 0;
-          return {shop:shopId,available:sh&&num(sh.deadlineMs)&&sh.deadlineMs>s.serverNow&&num(row?.initialStock)&&num(used)?Math.max(0,row.initialStock-used):0};
-        })};
-    }).sort((a,b)=>a.name.localeCompare(b.name,'de'));
+    const catalogList = (type, source) => {
+      // Owned seeds/eggs can be used without a price catalog. Keep their real
+      // native identifiers, not invented defaults. Shop-only entries can be
+      // shown now, but purchases still require a verified native coin price.
+      const entries = new Map(Object.entries(source || {}));
+      const inventory = s ? [...s.inventory.items, ...arr(s.inventory.storages).flatMap(st=>arr(st.items))] : [];
+      const shopItems = s ? Object.values(s.game.shops||{}).flatMap(sh=>arr(sh?.inventory)) : [];
+      for (const item of [...inventory,...shopItems]) {
+        const id=kindId(item||{});
+        if(item?.itemType===type && str(id) && !entries.has(id)) entries.set(id,null);
+      }
+      return [...entries].map(([id, record]) => {
+        const c = type === 'Seed' ? record?.seed : record;
+        const knownShops = arr(c?.eligibleShops).filter(x=>Object.hasOwn(shopNames,x));
+        const observedShops = s ? Object.entries(s.game.shops||{}).filter(([key,sh])=>Object.hasOwn(shopNames,key)&&arr(sh?.inventory).some(i=>i?.itemType===type&&kindId(i)===id)).map(([key])=>key) : [];
+        const shops = c ? knownShops : observedShops;
+        return {id, name: record?.name || c?.name || human(id), price:num(c?.coinPrice)?c.coinPrice:null,
+          catalogReady:!!c, shops, owned:s?total(s,type,id,true):null,
+          stock: shops.map(shopId=>{
+            const sh=s?.game.shops?.[shopId], row=arr(sh?.inventory).find(i=>i?.itemType===type&&kindId(i)===id);
+            const purchased=s?.own.shopPurchases?.[shopId];
+            const used=purchased?.restockId===sh?.restockId ? purchased?.purchases?.[id]||0 : 0;
+            return {shop:shopId,available:sh&&num(sh.deadlineMs)&&sh.deadlineMs>s.serverNow&&num(row?.initialStock)&&num(used)?Math.max(0,row.initialStock-used):0};
+          })};
+      }).sort((a,b)=>a.name.localeCompare(b.name,'de'));
+    };
     const weatherIds = [...new Set([...Object.keys(weatherNames),...(s?[weather(s)]:[]),...arr(s?.game.weatherForecast).map(w=>w?.weatherId).filter(str)])];
     return {
       seeds:catalogList('Seed',catalogs.plants), eggs:catalogList('Egg',catalogs.eggs),
@@ -246,7 +490,7 @@ function mountAutomationUI(parent, engine, document) {
   root.style.cssText='border-top:1px solid #355342;margin-top:12px;padding-top:10px';
   const summary=document.createElement('h3');summary.textContent='Automationszentrale · V15';
   summary.style.cssText='font-weight:bold;cursor:pointer';root.appendChild(summary);
-  const note=document.createElement('p');note.textContent='Neue Aktionen sind zunächst aus. Module einzeln freigeben. Käufe benötigen Auswahlliste, Preislimit, Tagesbudget und Coin-Reserve. Keine Credits, Trades oder Pet-Verkäufe.';
+  const note=document.createElement('p');note.textContent='Neue Aktionen sind zunächst aus. Module einzeln freigeben. Käufe benötigen nur deine Kaufregeln und genügend Coins. Keine Credits, Trades oder Pet-Verkäufe.';
   note.style.cssText='font-size:11px;line-height:1.5;color:#a8b9ae';root.appendChild(note);
   const alert=document.createElement('p');alert.style.cssText='font-size:11px;color:#f3bf8e';root.appendChild(alert);
   const inputs=new Map(),selectors=[],status=document.createElement('pre');
@@ -290,14 +534,15 @@ function mountAutomationUI(parent, engine, document) {
   const teamSelect=document.createElement('select');teamSelect.style.cssText=style;row('Gespeichertes Team',teamSelect,teams).classList.add('mg-wide-choice');
   const teamList=document.createElement('div');teams.appendChild(teamList);
   button('Teamregel speichern',()=>{if(weatherInput.value.trim()&&teamSelect.value)save({teamRules:[...config().teamRules.filter(r=>r.weather!==weatherInput.value.trim()),{weather:weatherInput.value.trim(),teamId:teamSelect.value}]});},teams);
-  const shop=section('Shops: Coin-Käufe mit Budget');check('Auto-Buy freigeben','buy',shop);number('Tagesbudget (0 = keine Käufe)','dailyBudget',0,1e12,shop);number('Coin-Mindestreserve','coinReserve',0,1e12,shop);
+  const shop=section('Shops: ausgewählte Artikel kaufen');check('Auto-Buy freigeben','buy',shop);
   const buyType=document.createElement('select');
   const typeNames={Seed:'Saatgut',Egg:'Eier',Tool:'Werkzeuge',Decor:'Dekoration'};
   for(const [type,name] of Object.entries(typeNames))buyType.add(new Option(name,type));
   buyType.style.cssText=style;buyType.dataset.mgChoice='buyType';row('Was kaufen?',buyType,shop).classList.add('mg-wide-choice');
   const buyId=document.createElement('select');buyId.style.cssText=style;buyId.dataset.mgChoice='buyItem';row('Artikel auswählen',buyId,shop).classList.add('mg-wide-choice');
   const shopId=document.createElement('select');shopId.style.cssText=style;row('In diesem Shop',shopId,shop).classList.add('mg-wide-choice');
-  const itemInfo=explain('Warte auf Spielkatalog …',shop);
+  const itemInfo=explain('Artikel werden aus Spiel und Inventar geladen …',shop);
+  button('Spieldaten neu laden',()=>{ void engine.loadCatalogs(true); },shop);
   function ruleNumber(label,value){const n=document.createElement('input');n.type='number';n.min='0';n.value=value;n.style.cssText=style+';width:110px';row(label,n,shop);return n;}
   const maxPrice=ruleNumber('Höchstens Coins pro Stück',0),perRestock=ruleNumber('Maximal pro Restock',1),maxOwned=ruleNumber('Gewünschter Gesamtbestand',10);
   const buyList=document.createElement('div');shop.appendChild(buyList);
@@ -309,18 +554,18 @@ function mountAutomationUI(parent, engine, document) {
     save({buyRules:[...config().buyRules.filter(x=>!(x.type===r.type&&x.id===r.id&&x.shop===r.shop)),r]});
   },shop);
   explain('Die Liste enthält alle im Spielkatalog bekannten Artikel, nicht nur deinen Besitz. Auch ausverkaufte Artikel können vorgemerkt werden. Eine Kaufregel schaltet Auto-Buy nicht von selbst ein.',shop);
-  explain('Nur Coins, nie Credits. Budget 0 = keine Käufe. F5 und Session-Reset setzen das Tagesbudget nicht zurück.',shop);
+  explain('Kauft deine ausgewählten Artikel, solange genügend Coins da sind. Kein Tagesbudget und keine Mindestreserve. Preislimit, Zielbestand und Restock-Menge bleiben aktiv; Credits werden nie ausgegeben.',shop);
   function chosenItem(choices){return (choices[{Seed:'seeds',Egg:'eggs',Tool:'tools',Decor:'decor'}[buyType.value]]||[]).find(x=>x.id===buyId.value);}
   function refreshBuy(choices,selectionChanged=false){
     const records=choices[{Seed:'seeds',Egg:'eggs',Tool:'tools',Decor:'decor'}[buyType.value]]||[];
-    const items=records.map(r=>({...r,name:r.name+(Number.isFinite(r.price)?' · '+r.price.toLocaleString('de-DE')+' Coins':' · nicht mit Coins kaufbar'),unavailable:!Number.isFinite(r.price)||!r.shops.length}));
+    const items=records.map(r=>({...r,name:r.name+(Number.isFinite(r.price)?' · '+r.price.toLocaleString('de-DE')+' Coins':r.catalogReady?' · nicht mit Coins kaufbar':' · Preis lädt …'),unavailable:!!r.catalogReady&&(!Number.isFinite(r.price)||!r.shops.length)}));
     pickers.options(buyId,items,buyId.value,'Bitte wählen',false);
     const item=chosenItem(choices),shops=(choices.shops||[]).filter(s=>item?.shops.includes(s.id));
     const chosenShop=shops.some(s=>s.id===shopId.value)?shopId.value:shops[0]?.id||'';
     pickers.options(shopId,shops,chosenShop,'Shop wählen',false);
     if(selectionChanged&&item&&Number.isFinite(item.price))maxPrice.value=String(item.price);
     const stock=item?.stock.find(s=>s.shop===shopId.value)?.available;
-    itemInfo.textContent=item?`${item.name}: ${item.owned??'–'} im Besitz · ${stock??0} im Shop. ${stock===0?'Wartet beim Kaufen auf Nachschub.':''}`:records.length?'Artikel wählen; der bekannte Coin-Preis wird als Preislimit vorgeschlagen.':'Warte auf Spielkatalog. Du musst keine Kennung eingeben.';
+    itemInfo.textContent=item?`${item.name}: ${item.owned??'–'} im Besitz · ${stock??0} im Shop. ${stock===0?'Wartet beim Kaufen auf Nachschub.':''}`:records.length?'Artikel wählen; der bekannte Coin-Preis wird als Preislimit vorgeschlagen.':'Spielkataloge werden automatisch gesucht. Vorhandene Eier und Samen findest du bereits unter Pflanzen.';
     addRule.disabled=!item||!Number.isFinite(item.price)||!shops.length;
   }
   function editRule(r){const choices=engine.menuChoices();buyType.value=r.type;buyId.dataset.options='';pickers.options(buyId,choices[{Seed:'seeds',Egg:'eggs',Tool:'tools',Decor:'decor'}[r.type]]||[],r.id);refreshBuy(choices);shopId.value=r.shop;maxPrice.value=r.maxPrice;perRestock.value=r.perRestock;maxOwned.value=r.maxOwned;buyType.focus();alert.textContent='Regel bearbeiten und anschließend speichern.';}
@@ -338,7 +583,7 @@ function mountAutomationUI(parent, engine, document) {
     for(const [key,toggle]of dependent){const item=inputs.get(key)||selectors.find(s=>s.key===key)?.input;if(item)item.closest('label').hidden=!c[toggle];}
     fieldInfo.textContent=choices.fields?`Felder: ${choices.fields.plant} grün für Pflanzen · ${choices.fields.egg} blau für Eier. Grau wird ignoriert.`:'Felder in „Felder“ grün oder blau markieren. Grau wird ignoriert.';
     pickers.refresh(choices);pickers.options(weatherInput,choices.weather,weatherInput.value,'Wetter wählen');pickers.options(teamSelect,choices.pets,teamSelect.value,'Team wählen');refreshBuy(choices);
-    status.textContent='Kataloge: '+info.catalogs+'\nWetter: '+(choices.weather.find(w=>w.id===info.weather)?.name||info.weather)+'\nReservierte Ausgaben heute: '+info.spentToday.toLocaleString('de-DE')+' / '+info.budget.toLocaleString('de-DE')+'\n'+info.modules.filter(m=>m.on).map(m=>m.label+': '+m.confirmed+' · '+m.status).join('\n')+(info.sell?'\nVerkauf: '+info.sell:'');
+    status.textContent='Kataloge: '+info.catalogs+'\nWetter: '+(choices.weather.find(w=>w.id===info.weather)?.name||info.weather)+'\nKäufe heute: '+info.spentToday.toLocaleString('de-DE')+' Coins'+'\n'+info.modules.filter(m=>m.on).map(m=>m.label+': '+m.confirmed+' · '+m.status).join('\n')+(info.sell?'\nVerkauf: '+info.sell:'');
     const sig=JSON.stringify([c.buyRules,c.teamRules,choices.seeds.map(x=>[x.id,x.name]),choices.eggs.map(x=>[x.id,x.name]),choices.tools.map(x=>[x.id,x.name]),choices.decor.map(x=>[x.id,x.name]),choices.pets]);
     if(sig!==lastSignature){
       lastSignature=sig;buyList.textContent='';teamList.textContent='';
@@ -803,7 +1048,7 @@ function mountFieldGrid(container, plan, onChange) {
   }
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-  const VERSION = "15.2.0";
+  const VERSION = "15.2.1";
   const UPDATE_URL = "https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js";
   const NUMBER_FIELDS = Object.freeze({
     sellThreshold: { min: 5, max: 200, step: 1 },
@@ -2143,19 +2388,17 @@ function mountFieldGrid(container, plan, onChange) {
     setTimeout(() => { void checkForUpdate(false); }, 2000);
   }
 
-  // ===== Native Kataloge: ausschließlich ein bereits geladenes Spielmodul =====
-  async function loadNativeAutomationCatalogs() {
-    const entries = typeof performance.getEntriesByType === 'function' ? performance.getEntriesByType('resource') : [];
-    const candidates = entries.map(entry => entry.name).filter(name => {
-      try {
-        const url = new URL(name, location.href);
-        return url.origin === location.origin && /^\/version\/\d+\/assets\/BakedRoundedRect-[A-Za-z0-9_-]+\.js$/.test(url.pathname);
-      } catch { return false; }
-    });
-    const url = candidates[candidates.length - 1];
-    if (!url) throw new Error('Nativer Katalog noch nicht geladen');
-    return import(url);
-  }
+  // ===== Own-game catalogs: observe early, recover from bootstrap imports =====
+  const nativeCatalogSource = createNativeCatalogSource({
+    document, performance,
+    PerformanceObserver: typeof PerformanceObserver === 'function' ? PerformanceObserver : null,
+    pageURL: () => location.href,
+    release: () => document.querySelector?.('meta[name="magiccircle-release"]')?.content ||
+      window.MagicCircle_RoomConnection?.currentWebSocket?.url?.match(/\/version\/(\d+)\//)?.[1] || '',
+    fetch: (...args) => fetch(...args),
+    importModule: url => import(url)
+  });
+  async function loadNativeAutomationCatalogs() { return nativeCatalogSource.load(); }
   automation = createAutomationCore({
     storage: localStorage,
     now: () => Date.now(),
@@ -2169,6 +2412,8 @@ function mountFieldGrid(container, plan, onChange) {
         heldId:bridge.heldId,selected:[...selectedSlots()].sort((a,b)=>a-b),fieldModes:fieldPlan.snapshot()};
     },
     loadCatalogs: loadNativeAutomationCatalogs,
+    catalogDiagnostics: () => nativeCatalogSource.diagnostics(),
+    onCatalogsChanged: () => automationUI?.refresh(),
     withPurchaseLock: (actor, fn) => typeof navigator.locks?.request === 'function'
       ? navigator.locks.request('magic-garden-autofarm-purchases',{ifAvailable:true}, lock => lock ? fn() : false)
       : Promise.resolve(false)
@@ -2211,5 +2456,5 @@ function mountFieldGrid(container, plan, onChange) {
   if (readValue(sessionStorage, KEYS.resume) === "1") {
     start({ auto: true });
   }
-  console.log("✅ Magic Garden AutoFarm V15.2.0 geladen (Automationszentrale, ohne Fremdskripte).");
+  console.log("✅ Magic Garden AutoFarm V15.2.1 geladen (Automationszentrale, ohne Fremdskripte).");
 })();

@@ -3,7 +3,7 @@ function mountAutomationUI(parent, engine, document) {
   root.style.cssText='border-top:1px solid #355342;margin-top:12px;padding-top:10px';
   const summary=document.createElement('h3');summary.textContent='Automationszentrale · V15';
   summary.style.cssText='font-weight:bold;cursor:pointer';root.appendChild(summary);
-  const note=document.createElement('p');note.textContent='Neue Aktionen sind zunächst aus. Module einzeln freigeben. Käufe benötigen Auswahlliste, Preislimit, Tagesbudget und Coin-Reserve. Keine Credits, Trades oder Pet-Verkäufe.';
+  const note=document.createElement('p');note.textContent='Neue Aktionen sind zunächst aus. Module einzeln freigeben. Käufe benötigen nur deine Kaufregeln und genügend Coins. Keine Credits, Trades oder Pet-Verkäufe.';
   note.style.cssText='font-size:11px;line-height:1.5;color:#a8b9ae';root.appendChild(note);
   const alert=document.createElement('p');alert.style.cssText='font-size:11px;color:#f3bf8e';root.appendChild(alert);
   const inputs=new Map(),selectors=[],status=document.createElement('pre');
@@ -47,14 +47,15 @@ function mountAutomationUI(parent, engine, document) {
   const teamSelect=document.createElement('select');teamSelect.style.cssText=style;row('Gespeichertes Team',teamSelect,teams).classList.add('mg-wide-choice');
   const teamList=document.createElement('div');teams.appendChild(teamList);
   button('Teamregel speichern',()=>{if(weatherInput.value.trim()&&teamSelect.value)save({teamRules:[...config().teamRules.filter(r=>r.weather!==weatherInput.value.trim()),{weather:weatherInput.value.trim(),teamId:teamSelect.value}]});},teams);
-  const shop=section('Shops: Coin-Käufe mit Budget');check('Auto-Buy freigeben','buy',shop);number('Tagesbudget (0 = keine Käufe)','dailyBudget',0,1e12,shop);number('Coin-Mindestreserve','coinReserve',0,1e12,shop);
+  const shop=section('Shops: ausgewählte Artikel kaufen');check('Auto-Buy freigeben','buy',shop);
   const buyType=document.createElement('select');
   const typeNames={Seed:'Saatgut',Egg:'Eier',Tool:'Werkzeuge',Decor:'Dekoration'};
   for(const [type,name] of Object.entries(typeNames))buyType.add(new Option(name,type));
   buyType.style.cssText=style;buyType.dataset.mgChoice='buyType';row('Was kaufen?',buyType,shop).classList.add('mg-wide-choice');
   const buyId=document.createElement('select');buyId.style.cssText=style;buyId.dataset.mgChoice='buyItem';row('Artikel auswählen',buyId,shop).classList.add('mg-wide-choice');
   const shopId=document.createElement('select');shopId.style.cssText=style;row('In diesem Shop',shopId,shop).classList.add('mg-wide-choice');
-  const itemInfo=explain('Warte auf Spielkatalog …',shop);
+  const itemInfo=explain('Artikel werden aus Spiel und Inventar geladen …',shop);
+  button('Spieldaten neu laden',()=>{ void engine.loadCatalogs(true); },shop);
   function ruleNumber(label,value){const n=document.createElement('input');n.type='number';n.min='0';n.value=value;n.style.cssText=style+';width:110px';row(label,n,shop);return n;}
   const maxPrice=ruleNumber('Höchstens Coins pro Stück',0),perRestock=ruleNumber('Maximal pro Restock',1),maxOwned=ruleNumber('Gewünschter Gesamtbestand',10);
   const buyList=document.createElement('div');shop.appendChild(buyList);
@@ -66,18 +67,18 @@ function mountAutomationUI(parent, engine, document) {
     save({buyRules:[...config().buyRules.filter(x=>!(x.type===r.type&&x.id===r.id&&x.shop===r.shop)),r]});
   },shop);
   explain('Die Liste enthält alle im Spielkatalog bekannten Artikel, nicht nur deinen Besitz. Auch ausverkaufte Artikel können vorgemerkt werden. Eine Kaufregel schaltet Auto-Buy nicht von selbst ein.',shop);
-  explain('Nur Coins, nie Credits. Budget 0 = keine Käufe. F5 und Session-Reset setzen das Tagesbudget nicht zurück.',shop);
+  explain('Kauft deine ausgewählten Artikel, solange genügend Coins da sind. Kein Tagesbudget und keine Mindestreserve. Preislimit, Zielbestand und Restock-Menge bleiben aktiv; Credits werden nie ausgegeben.',shop);
   function chosenItem(choices){return (choices[{Seed:'seeds',Egg:'eggs',Tool:'tools',Decor:'decor'}[buyType.value]]||[]).find(x=>x.id===buyId.value);}
   function refreshBuy(choices,selectionChanged=false){
     const records=choices[{Seed:'seeds',Egg:'eggs',Tool:'tools',Decor:'decor'}[buyType.value]]||[];
-    const items=records.map(r=>({...r,name:r.name+(Number.isFinite(r.price)?' · '+r.price.toLocaleString('de-DE')+' Coins':' · nicht mit Coins kaufbar'),unavailable:!Number.isFinite(r.price)||!r.shops.length}));
+    const items=records.map(r=>({...r,name:r.name+(Number.isFinite(r.price)?' · '+r.price.toLocaleString('de-DE')+' Coins':r.catalogReady?' · nicht mit Coins kaufbar':' · Preis lädt …'),unavailable:!!r.catalogReady&&(!Number.isFinite(r.price)||!r.shops.length)}));
     pickers.options(buyId,items,buyId.value,'Bitte wählen',false);
     const item=chosenItem(choices),shops=(choices.shops||[]).filter(s=>item?.shops.includes(s.id));
     const chosenShop=shops.some(s=>s.id===shopId.value)?shopId.value:shops[0]?.id||'';
     pickers.options(shopId,shops,chosenShop,'Shop wählen',false);
     if(selectionChanged&&item&&Number.isFinite(item.price))maxPrice.value=String(item.price);
     const stock=item?.stock.find(s=>s.shop===shopId.value)?.available;
-    itemInfo.textContent=item?`${item.name}: ${item.owned??'–'} im Besitz · ${stock??0} im Shop. ${stock===0?'Wartet beim Kaufen auf Nachschub.':''}`:records.length?'Artikel wählen; der bekannte Coin-Preis wird als Preislimit vorgeschlagen.':'Warte auf Spielkatalog. Du musst keine Kennung eingeben.';
+    itemInfo.textContent=item?`${item.name}: ${item.owned??'–'} im Besitz · ${stock??0} im Shop. ${stock===0?'Wartet beim Kaufen auf Nachschub.':''}`:records.length?'Artikel wählen; der bekannte Coin-Preis wird als Preislimit vorgeschlagen.':'Spielkataloge werden automatisch gesucht. Vorhandene Eier und Samen findest du bereits unter Pflanzen.';
     addRule.disabled=!item||!Number.isFinite(item.price)||!shops.length;
   }
   function editRule(r){const choices=engine.menuChoices();buyType.value=r.type;buyId.dataset.options='';pickers.options(buyId,choices[{Seed:'seeds',Egg:'eggs',Tool:'tools',Decor:'decor'}[r.type]]||[],r.id);refreshBuy(choices);shopId.value=r.shop;maxPrice.value=r.maxPrice;perRestock.value=r.perRestock;maxOwned.value=r.maxOwned;buyType.focus();alert.textContent='Regel bearbeiten und anschließend speichern.';}
@@ -95,7 +96,7 @@ function mountAutomationUI(parent, engine, document) {
     for(const [key,toggle]of dependent){const item=inputs.get(key)||selectors.find(s=>s.key===key)?.input;if(item)item.closest('label').hidden=!c[toggle];}
     fieldInfo.textContent=choices.fields?`Felder: ${choices.fields.plant} grün für Pflanzen · ${choices.fields.egg} blau für Eier. Grau wird ignoriert.`:'Felder in „Felder“ grün oder blau markieren. Grau wird ignoriert.';
     pickers.refresh(choices);pickers.options(weatherInput,choices.weather,weatherInput.value,'Wetter wählen');pickers.options(teamSelect,choices.pets,teamSelect.value,'Team wählen');refreshBuy(choices);
-    status.textContent='Kataloge: '+info.catalogs+'\nWetter: '+(choices.weather.find(w=>w.id===info.weather)?.name||info.weather)+'\nReservierte Ausgaben heute: '+info.spentToday.toLocaleString('de-DE')+' / '+info.budget.toLocaleString('de-DE')+'\n'+info.modules.filter(m=>m.on).map(m=>m.label+': '+m.confirmed+' · '+m.status).join('\n')+(info.sell?'\nVerkauf: '+info.sell:'');
+    status.textContent='Kataloge: '+info.catalogs+'\nWetter: '+(choices.weather.find(w=>w.id===info.weather)?.name||info.weather)+'\nKäufe heute: '+info.spentToday.toLocaleString('de-DE')+' Coins'+'\n'+info.modules.filter(m=>m.on).map(m=>m.label+': '+m.confirmed+' · '+m.status).join('\n')+(info.sell?'\nVerkauf: '+info.sell:'');
     const sig=JSON.stringify([c.buyRules,c.teamRules,choices.seeds.map(x=>[x.id,x.name]),choices.eggs.map(x=>[x.id,x.name]),choices.tools.map(x=>[x.id,x.name]),choices.decor.map(x=>[x.id,x.name]),choices.pets]);
     if(sig!==lastSignature){
       lastSignature=sig;buyList.textContent='';teamList.textContent='';
