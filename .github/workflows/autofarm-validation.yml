@@ -22,7 +22,9 @@ jobs:
           node --check MagicGardenAutoFarm.user.js
           node --check src/automation-core.js
           node --check src/automation-ui.js
-          node --test tests/main-upgrade.test.cjs tests/automation.test.cjs tests/reservations.test.cjs
+          node --check src/field-plan.js
+          node --check src/choice-controls.js
+          node --test tests/main-upgrade.test.cjs tests/automation.test.cjs tests/reservations.test.cjs tests/field-roles.test.cjs
       - name: Archive validated source and tests
         if: always()
         uses: actions/upload-artifact@v4
@@ -35,4 +37,5 @@ jobs:
             tests/
             README.md
             AUTOMATION.md
+            FIELD-ROLES.md
           retention-days: 3

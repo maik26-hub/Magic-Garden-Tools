@@ -1,4 +1,4 @@
-# Magic Garden AutoFarm — V15.1.0
+# Magic Garden AutoFarm — V15.2.0
 
 Ein eigenständiges Tampermonkey-Skript mit Auto-Harvest, Auto-Sell und einer modularen Automationszentrale. Inoffizielles Community-Projekt, nicht mit Magic Garden verbunden.
 
@@ -6,61 +6,59 @@ Ein eigenständiges Tampermonkey-Skript mit Auto-Harvest, Auto-Sell und einer mo
 
 **Im bisherigen Menü: Update prüfen → Installieren → in Tampermonkey bestätigen → F5.**
 
-V13-/V14-Nutzer benötigen keinen neuen Link und kein zweites Skript. Name (`Magic Garden AutoFarm`), Namespace (`mg-autofarm-local`), Download-URL, Feldauswahl und die bisherigen Einstellungs-/Timer-Schlüssel bleiben unverändert.
+V13-/V14-/V15-Nutzer benötigen keinen neuen Link und kein zweites Skript. Name (`Magic Garden AutoFarm`), Namespace (`mg-autofarm-local`), Download-URL und bisherige Einstellungen bleiben erhalten.
 
 Neue Nutzer: [AutoFarm installieren](https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js).
 
-## Kompaktes Menü (V15.1)
+## Neu: Grün für Pflanzen, Blau für Eier, Grau ignorieren
 
-Zwölf schlichte Icon-Kacheln öffnen jeweils einen Bereich: Übersicht, Felder, Pflanzen, Pets & Futter, Einkauf, Schutz, Journal, Wetter, Autopilot, Einstellungen, Updates und Diagnose. Die lange Optionsliste ist in einzelne Ansichten aufgeteilt; alle vorhandenen Module und Einstellungen bleiben erhalten.
+In **Felder** eine Farbe auswählen und klicken oder mit gedrückter Maus über die Kacheln ziehen. **Grün** erlaubt Pflanzenaktionen, **Blau** Eieraktionen, **Grau** keine gezielten Feldaktionen. Die jeweiligen Automationsschalter müssen zusätzlich eingeschaltet sein.
 
-**Die Kopfzeile mit Status, Version, Verschieben und Einklappen bleibt immer stehen.** Auch Start/Stop und der Zurück-Pfeil scrollen nicht mit; nur der Inhalt darunter scrollt. Das gilt ebenfalls auf kleinen Fenstern. Die zuletzt geöffnete Ansicht, Position und der eingeklappte Zustand werden gespeichert.
+**Die alte Angabe „Letzte Auswahlfelder für Eier“ entfällt.** Vorhandene ausgewählte Felder werden einmalig grün übernommen; Eierfelder werden nicht geraten, sondern bewusst blau markiert. Bereits belegte Felder werden nicht zum Erzwingen ihrer neuen Rolle geleert.
 
-Unter **Autopilot** stehen der Hauptschalter und das bisherige sichere Preset. **Übersicht** enthält die Session-Statistiken und den Reset. **Felder** unterstützt weiterhin Klicks und Ziehen. **Updates** bietet weiterhin **Update prüfen → Installieren** über exakt denselben Hauptkanal.
+## Keine Kennungen mehr eintippen
 
-## Die Automationsfunktionen
+Saatgut, Eier, Artikeltypen und Shops werden aus Menüs gewählt. Pflanzenarten, gewünschte Mutationen und Wetterpausen haben eine durchsuchbare Mehrfachauswahl. Auch Wetter-Petteams benötigen keine eingetippten IDs.
 
-Neue Aktionen sind beim Upgrade **zunächst aus**. Im Menü lassen sie sich einzeln freigeben. **„Sicherer Autopilot“** aktiviert Wertschutz, Journal, Pet-Fütterung, fertige Eier, Quest-Belohnungen und das Auffüllen vorhandener Lagerstapel — keine Einkäufe, kein Nachpflanzen und kein Gießkannenverbrauch.
+**Auto-Buy:** Saatgut/Eier/Werkzeuge/Dekoration wählen → Artikel anhand des Namens wählen → passenden Shop und Zahlenlimits festlegen → Kaufregel speichern. Die Liste enthält alle im Spielkatalog bekannten Artikel, nicht nur den eigenen Besitz. Coin-Preis, Besitz und Shopbestand werden angezeigt. Ein bewusst ausgewählter Artikel übernimmt seinen bekannten Preis als Vorschlag für das Preislimit. Gespeicherte Regeln lassen sich bearbeiten und entfernen.
 
-| Bereich | Implementiertes Verhalten |
+Unbekannte Katalogdaten werden nicht erraten; das Menü wartet und behält gespeicherte Einstellungen. **Budget 0 bedeutet keine Käufe.** Eine neue Kaufregel aktiviert nicht automatisch Auto-Buy.
+
+[Bedienung, Migration und Testgrenzen der Feldfarben/Auswahlmenüs](FIELD-ROLES.md)
+
+## Kompaktes Menü
+
+Zwölf schlichte Icon-Kacheln öffnen jeweils einen Bereich. **Die Kopfzeile mit Status, Version, Verschieben und Einklappen bleibt stehen.** Start/Stop und der Zurück-Pfeil scrollen ebenfalls nicht mit. Ansicht, Position und eingeklappter Zustand werden gespeichert.
+
+## Automationsfunktionen
+
+| Bereich | Verhalten |
 |---|---|
-| Pflanzen | Gewähltes Saatgut auf ausgewählten leeren Feldern nachpflanzen; bei Bedarf einzelne Seeds aus dem Seed Silo holen |
-| Eier | Reife Eier ausbrüten; gewählte Eier auf reservierten leeren Auswahlfeldern nachlegen |
+| Pflanzen | Gewähltes Saatgut auf leeren grünen Feldern nachpflanzen; bei Bedarf einzelne Seeds aus dem Seed Silo holen |
+| Eier | Auf blauen Feldern reife Eier öffnen und gewählte Eier nachlegen |
 | Pets | Hungrige aktive Pets mit passenden, günstigen, nicht favorisierten und nicht mutierten Produkten füttern |
 | Futtertrog | Geeignetes Futter bis zum eingestellten Ziel nachfüllen |
-| Lager | Bestehende Seed-/Tool-/Decor-Stapel auffüllen, ohne andere Items zu verdrängen oder wahllos umzusortieren |
-| Gießen | Nur bei ausreichender Restwachstumszeit und verbleibender Gießkannen-Reserve |
-| Journal | Mit vorhandener Camera noch fehlende Varianten aus Inventar, Garten oder aktiven Pets fotografieren |
-| Quests | Fertige tägliche Belohnungen und Abschlussbonus abholen; bereits freigegebene Aufgaben passend priorisieren |
+| Lager | Bestehende Seed-/Tool-/Decor-Stapel auffüllen, ohne andere Items zu verdrängen |
+| Gießen | Nur auf grünen Feldern, bei ausreichender Restwachstumszeit und mit Gießkannen-Reserve |
+| Journal | Mit Camera fehlende Varianten aus Inventar, aktiven Pets oder grünen Gartenfeldern fotografieren |
+| Quests | Fertige tägliche Belohnungen und Abschlussbonus abholen |
 | Wertschutz | Gewählte Arten / wertvolle Produkte favorisieren; Verkauf wartet auf tatsächlichen Favoritenstatus |
 | Erntefilter | Mindestgröße, Basiswert, gewünschte Mutationen und Wetterpausen |
-| Wetter-Teams | Zwischen ausdrücklich ausgewählten, bereits gespeicherten Petteams wechseln |
-| Shops | Ausschließlich freigegebene Seed-/Egg-/Tool-/Decor-Artikel mit Coin-Budget, Mindestreserve, Preislimit, Bestandsziel und Restock-Limit kaufen |
+| Wetterteams | Zwischen ausdrücklich ausgewählten gespeicherten Petteams wechseln |
+| Shops | Freigegebene Coin-Artikel mit Tagesbudget, Reserve, Preislimit, Zielbestand und Restock-Limit kaufen |
 
-Alle Aktionen teilen sich **einen seriellen Ausführungspfad**. Ergebnisse werden über Serverantworten zugeordnet. Ein unklarer Ausgang wird nicht blind wiederholt; bei Favoriten-Toggles verhindert eine dauerhafte lokale Reservierung ein versehentliches Entsperren.
+Alle Aktionen teilen sich einen seriellen Ausführungspfad. Unklare Ergebnisse werden nicht blind wiederholt. Native Sperren und Favoriten haben Vorrang. Neue Automationsmodule sind ohne vorherige Freigabe ausgeschaltet. Das Preset **Sicherer Autopilot** aktiviert Wertschutz, Journal, Fütterung, reife Eier, fertige Questbelohnungen und vorhandene Lagerstapel; nicht Einkäufe, Nachpflanzen oder Gießen.
 
-## Einmal konfigurieren
+## Grenzen und Sicherheit
 
-Saatgut und Eier wählst du im Menü selbst aus. Kaufregeln benötigen Artikel, Shop, Stückpreislimit und Zielbestand; zusätzlich Tagesbudget und Coin-Reserve. **Budget 0 bedeutet keine Käufe.** Das Tagesbudget ist konservativ pro Browser-Spiel-Origin und UTC-Tag gespeichert und wird nicht durch F5, Lobbywechsel oder Session-Reset gelöscht. Ein nicht bestätigter Kauf kann weitere Käufe sperren.
+Die Feldfarben steuern Feldaktionen, nicht unabhängig aktivierte Inventar-/Shop-Regeln. Eine bereits gesendete Aktion lässt sich durch Umfärben nicht rückgängig machen. Budgetreservierungen bleiben über F5, Lobbywechsel und Session-Reset erhalten.
 
-Native Sperren sowie der bisherige Mutations-/Max-Größen-Schutz haben Vorrang vor Erntefiltern. Bei fehlenden Preisen, Katalogen, Spieler- oder Inventardaten wartet das betroffene Modul statt zu raten. Status und „Plan prüfen“ stehen im Menü; kein Konsolen-Suchen nötig.
+Keine Credits-/Echtgeldkäufe, Trades, Pet-Verkäufe oder destruktiven Umbauten. Fishing, Garden Defence und weitere Minispiele sind nicht enthalten. Anti-AFK bleibt experimentell. Spielupdates können interne Kataloge oder Befehlsformen ändern; fehlende Daten führen zum Warten statt zu geratenen Aktionen. Andere Mods können die Verbindung verändern; nur eine AutoFarm-Version gleichzeitig starten.
 
-## Grenzen
+## Entwicklung und Tests
 
-Das ist **keine belegte 90–100-%-Automatisierung des gesamten Spiels**. Minispiele/Fishing/Garden Defence, Handel, Pet-Verkäufe, destruktives Umgestalten, gezielte Weltbewegung, Credit-/Echtgeldkäufe und beliebiger Trank-/Kristallverbrauch sind nicht enthalten. Nicht jede Quest wird automatisch lösbar. Anti-AFK bleibt experimentell; Browser oder Server können synthetische Bewegungsereignisse ignorieren.
+- `node scripts/build.cjs`: erzeugt die einzige installierbare Hauptdatei `MagicGardenAutoFarm.user.js`.
+- `node --test tests/main-upgrade.test.cjs tests/automation.test.cjs tests/reservations.test.cjs tests/field-roles.test.cjs`: 89 Regressionen.
+- `python tests/browser/compact_menu.py` und `python tests/browser/field_choices.py`: 70 Chromium-Prüfungen mit simulierten Spielzuständen, keine Live-Account-Tests.
 
-Die Befehlsformen wurden am öffentlichen Spielbuild 1517 geprüft. Automatisierte Tests und Browser-Tests verwenden simulierte Spieldaten; ein echter Langzeittest sämtlicher neuer Module ist weiterhin nötig. Andere Mods können die Verbindung verändern; nicht mehrere AutoFarm-Versionen parallel starten.
-
-## Entwicklung
-
-- `src/core-v14.user.js`: unveränderte Basis der bisherigen Hauptversion.
-- `src/automation-core.js`: Regeln, Planung, Budget und Bestätigungen.
-- `src/automation-ui.js`: Menü und Konfiguration.
-- `node scripts/build.cjs`: erzeugt die **einzige** installierbare Hauptdatei `MagicGardenAutoFarm.user.js`.
-- `node --test tests/main-upgrade.test.cjs tests/automation.test.cjs tests/reservations.test.cjs`: aktuelle Regressionen.
-
-[Protokollgrundlage und Testgrenzen](AUTOMATION.md)
-
-## UI-Regressionen
-
-`python tests/browser/compact_menu.py` prüft die fertige Datei in Chromium mit simuliertem Spiel/Browser-Speicher. Screenshots und ein JSON-Bericht werden unter `test-output/` abgelegt. Abhängigkeit: Playwright für Python, Chromium (bei Bedarf `CHROMIUM_PATH`). Der Test benötigt keine Spiel- oder GitHub-Anmeldung und navigiert nicht zum Live-Spiel. Ein Seitenneustart wird mit einem neuen isolierten Dokument und wiederhergestellten Speichern simuliert.
+[Protokollgrundlage und Grenzen der ursprünglichen Automation](AUTOMATION.md) · [Aktuelle Feldzuordnung](FIELD-ROLES.md)
