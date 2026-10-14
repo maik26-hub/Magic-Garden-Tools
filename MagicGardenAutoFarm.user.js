@@ -1,17 +1,87 @@
 // ==UserScript==
 // @name         Magic Garden AutoFarm
 // @namespace    mg-autofarm-local
-// @version      15.2.2
+// @version      15.2.3
 // @updateURL   https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js
 // @downloadURL https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js
-// @description  V15.2.2: all-inventory egg placement, independent hatch/place filters and safe migration
+// @description  V15.2.3: automatic red update badge, clickable install and privileged checks
 // @match        https://magicgarden.gg/*
 // @run-at       document-start
-// @grant        none
+// @grant        GM_xmlhttpRequest
+// @grant        unsafeWindow
+// @connect      raw.githubusercontent.com
 // ==/UserScript==
 
 (() => {
   "use strict";
+  const window = typeof unsafeWindow !== "undefined" ? unsafeWindow : globalThis.window;
+
+/** Dedicated updater transport.
+ * Tampermonkey GM_xmlhttpRequest bypasses the game's connect-src/CORS limits.
+ * The fetch fallback is for non-Tampermonkey environments and offline tests.
+ * Neither path runs, evaluates, or imports the remote userscript.
+ */
+async function fetchReleaseSource(url, options = {}) {
+  const gm = options.gmRequest;
+  const fetchImpl = options.fetchImpl;
+  const timeoutMs = options.timeoutMs || 10000;
+  const now = typeof options.now === 'function' ? options.now() : Date.now();
+  const requestURL = url + (url.includes('?') ? '&' : '?') + 'check=' + now;
+  let gmError = null;
+  if (typeof gm === 'function') {
+    try {
+      return await new Promise((resolve, reject) => {
+        let settled = false;
+        const done = (error, value) => {
+          if (settled) return;
+          settled = true;
+          if (error) reject(error);
+          else resolve(value);
+        };
+        try {
+          gm({
+            method: 'GET',
+            url: requestURL,
+            anonymous: true,
+            timeout: timeoutMs,
+            onload: response => {
+              if (response?.status !== 200 ||
+                  typeof response.responseText !== 'string') {
+                done(new Error('Updater HTTP ' + (response?.status ?? 'unbekannt')));
+              } else {
+                done(null, response.responseText);
+              }
+            },
+            onerror: () => done(new Error('Updater-Netzwerkfehler')),
+            ontimeout: () => done(new Error('Updater-Timeout')),
+            onabort: () => done(new Error('Updater abgebrochen'))
+          });
+        } catch (error) {
+          done(error);
+        }
+      });
+    } catch (error) {
+      // The secondary fetch is useful with userscript managers where GM
+      // permission is unavailable; failure stays neutral in the UI.
+      gmError = error;
+    }
+  }
+  if (typeof fetchImpl !== 'function') throw gmError || new Error('Updater-Transport fehlt');
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetchImpl(requestURL, {
+      cache: 'no-store', credentials: 'omit', mode: 'cors',
+      signal: controller.signal
+    });
+    if (!response.ok) throw new Error('Updater HTTP ' + response.status);
+    return await response.text();
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+
 
 /** Own-game catalog discovery. No pinned chunk name, external catalogs or eval.
  * Resource observation starts at document-start; missing timing entries are
@@ -740,7 +810,10 @@ function mountCompactMenu(ui) {
 #mg-autofarm-v13 .mg-menu-title {font:700 14px/1.2 system-ui,sans-serif!important;min-width:0;flex:1;display:flex;align-items:center;gap:7px;white-space:nowrap}
 #mg-autofarm-v13 .mg-dot {width:7px;height:7px;border-radius:50%;background:#a79c8c;display:inline-block;flex:none}
 #mg-autofarm-v13[data-running="true"] .mg-dot {background:#a4ca91;box-shadow:0 0 0 3px #a4ca9110}
-#mg-autofarm-v13 .mg-version {font:600 10px/1.3 ui-monospace,monospace;color:var(--mg-accent);padding:4px 7px;border-radius:10px;background:#354032;flex:none;white-space:nowrap}
+#mg-autofarm-v13.mg-compact a.mg-version {font:600 10px/1.3 ui-monospace,monospace!important;color:var(--mg-accent)!important;padding:4px 7px!important;border-radius:10px!important;background:#354032!important;border:1px solid transparent!important;flex:none;white-space:nowrap;text-decoration:none!important;box-shadow:none!important}
+#mg-autofarm-v13.mg-compact a.mg-version[data-update="available"] {color:#ffe5e5!important;background:#922d30!important;border-color:#e7666a!important;box-shadow:0 0 0 2px #e7666a23!important;animation:mg-update-flash 2.2s ease-in-out infinite}
+@keyframes mg-update-flash {50%{border-color:#ffd0d0;box-shadow:0 0 0 4px #e7666a16}}
+@media (prefers-reduced-motion:reduce) {#mg-autofarm-v13.mg-compact a.mg-version {animation:none!important}}
 #mg-autofarm-v13.mg-compact button,#mg-autofarm-v13.mg-compact a {font:600 12px/1.3 system-ui,sans-serif!important;color:var(--mg-text)!important;background:var(--mg-surface)!important;border:1px solid var(--mg-line)!important;border-radius:10px!important;min-width:0;padding:8px!important;cursor:pointer;box-shadow:0 2px 0 #19161155;transition:background .12s ease,border-color .12s ease;text-decoration:none}
 #mg-autofarm-v13.mg-compact button:hover,#mg-autofarm-v13.mg-compact a:hover {background:var(--mg-raised)!important;border-color:#8a795f!important}
 #mg-autofarm-v13.mg-compact button:disabled {cursor:default;opacity:.45}
@@ -800,7 +873,15 @@ function mountCompactMenu(ui) {
   grip.classList.add('mg-menu-grip'); grip.replaceChildren(svg('grip'));
   const dot = node('span', 'mg-dot'); const label = node('span', '', 'AutoFarm');
   headline.replaceChildren(dot, label);
-  const badge = node('span', 'mg-version', 'v' + version); header.insertBefore(badge, toggle);
+  // Clickable even when the update service is unreachable: Tampermonkey can
+  // still install from the official repo via its normal .user.js handler.
+  const badge = node('a', 'mg-version', 'v' + version);
+  badge.href = 'https://github.com/maik26-hub/Magic-Garden-Tools/raw/main/MagicGardenAutoFarm.user.js';
+  badge.target = '_blank'; badge.rel = 'noopener noreferrer';
+  badge.dataset.update = 'checking';
+  badge.setAttribute('aria-label', 'AutoFarm v' + version + ' – Update-Installation öffnen');
+  badge.title = 'Version v' + version + ' · Klicken zum Aktualisieren';
+  header.insertBefore(badge, toggle);
   toggle.classList.add('mg-menu-toggle'); toggle.replaceChildren(svg('chevron'));
   toggle.setAttribute('aria-controls', 'mg-menu-body');
   body.id = 'mg-menu-body'; body.classList.add('mg-menu-body');
@@ -843,12 +924,11 @@ function mountCompactMenu(ui) {
   // All original controls are MOVED, not copied, so their handlers and focus state survive.
   auto.views.protection.prepend(protectionToggles);
   const settingsView = node('div'); settingsView.append(settings, toggles);
-  const updates = node('div'); updates.append(node('p', 'mg-version-note', 'Installiert: v' + version), updateStatus, updateControls);
   const descriptors = [
     ['overview', 'Übersicht', overview], ['fields', 'Felder', fields], ['farming', 'Pflanzen', auto.views.farming],
     ['pets', 'Pets & Futter', auto.views.pets], ['shop', 'Einkauf', auto.views.shop], ['protection', 'Schutz', auto.views.protection],
     ['journal', 'Journal', auto.views.journal], ['teams', 'Wetter', auto.views.teams], ['automation', 'Autopilot', auto.views.automation],
-    ['settings', 'Einstellungen', settingsView], ['updates', 'Updates', updates], ['diagnostics', 'Diagnose', diagnostics],
+    ['settings', 'Einstellungen', settingsView], ['diagnostics', 'Diagnose', diagnostics],
   ];
   const views = new Map([['home', home]]); const shortcuts = new Map();
   scroll.appendChild(home);
@@ -904,8 +984,11 @@ function mountCompactMenu(ui) {
     metricValues.coins.title = data.coins;
     for (const [key, el] of Object.entries(statValues)) text(el, data[key]);
     text(homeState, data.connection); startButton.disabled = data.running || data.busy; stopButton.disabled = !data.running;
-    shortcuts.get('updates').dataset.new = String(!!data.update);
-    shortcuts.get('updates').title = data.update ? 'Update verfügbar: v' + data.update : 'Updates';
+    badge.dataset.update = data.update ? 'available' : 'current';
+    const description = data.update
+      ? 'Update verfügbar: v' + data.update + ' – Klicken zum Installieren'
+      : 'Installiert: v' + version + ' – Klicken zum Prüfen/Installieren in Tampermonkey';
+    badge.title = description; badge.setAttribute('aria-label', description);
   }
   let saved = 'home'; try { saved = storage.getItem(pageKey) || 'home'; } catch { /* use home */ }
   show(saved); setCollapsed(ui.collapsed);
@@ -1131,7 +1214,7 @@ function mountFieldGrid(container, plan, onChange) {
   }
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-  const VERSION = "15.2.2";
+  const VERSION = "15.2.3";
   const UPDATE_URL = "https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js";
   const NUMBER_FIELDS = Object.freeze({
     sellThreshold: { min: 5, max: 200, step: 1 },
@@ -2066,20 +2149,16 @@ function mountFieldGrid(container, plan, onChange) {
     return 0;
   }
   async function checkForUpdate(force = false) {
-    if (updateRunning || (!force && Date.now() - updateInfo.checkedAt < 6 * 3600000)) {
+    if (updateRunning || (!force && Date.now() - updateInfo.checkedAt < 30 * 60000)) {
       return { ...updateInfo };
     }
     updateRunning = true;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
     try {
-      // credentials:"omit" vermeidet CORS-Fehler durch Credential-/Wildcard-Mix.
-      // Query-Parameter umgehen alte Edge-/Proxy-Caches; Link selbst bleibt konstant.
-      const response = await fetch(UPDATE_URL + "?check=" + Date.now(), {
-        cache: "no-store", credentials: "omit", mode: "cors", signal: controller.signal
+      const source = await fetchReleaseSource(UPDATE_URL, {
+        gmRequest: typeof GM_xmlhttpRequest === "function" ? GM_xmlhttpRequest : null,
+        fetchImpl: fetch, timeoutMs: 10000
       });
-      if (!response.ok) throw new Error("HTTP " + response.status);
-      const remote = parseMainRelease(await response.text());
+      const remote = parseMainRelease(source);
       if (!remote) throw new Error("Keine gueltige AutoFarm-Version");
       const comparison = compareVersions(remote, VERSION);
       updateInfo.newer = comparison > 0 ? remote : null;
@@ -2092,7 +2171,6 @@ function mountFieldGrid(container, plan, onChange) {
       updateInfo.status = "Update-Check fehlgeschlagen (Verbindung/Release)";
       updateInfo.newer = null;
     } finally {
-      clearTimeout(timeout);
       updateInfo.checkedAt = Date.now();
       updateRunning = false;
       updatePanel();
@@ -2195,7 +2273,7 @@ function mountFieldGrid(container, plan, onChange) {
     header.addEventListener("pointerdown", event => {
       // Plus/Minus bleibt ein normaler Button und startet keinen Drag.
       if (event.button !== 0 || event.isPrimary === false ||
-          event.target?.closest?.("button")) return;
+          event.target?.closest?.("button, a, [role=button]")) return;
       const rect = panel.getBoundingClientRect();
       drag = {
         pointerId: event.pointerId,
@@ -2416,7 +2494,7 @@ function mountFieldGrid(container, plan, onChange) {
     updateStatus.textContent = updateInfo.status;
     const updateControls = document.createElement("div");
     updateControls.style.cssText = "display:flex;gap:8px;align-items:center";
-    updateControls.appendChild(btn("Update prüfen", () => { void checkForUpdate(true); }));
+    // Update check runs on a timer. The sticky version badge opens install.
     updateLink = document.createElement("a");
     updateLink.href = UPDATE_URL;
     updateLink.target = "_blank";
@@ -2469,6 +2547,7 @@ function mountFieldGrid(container, plan, onChange) {
     setInterval(updatePanel, 1000);
     // Status einmal beim Laden prüfen; danach nur auf Knopfdruck bzw. spaeter pro Sitzung.
     setTimeout(() => { void checkForUpdate(false); }, 2000);
+    setInterval(() => { void checkForUpdate(false); }, 30 * 60000);
   }
 
   // ===== Own-game catalogs: observe early, recover from bootstrap imports =====
@@ -2539,5 +2618,5 @@ function mountFieldGrid(container, plan, onChange) {
   if (readValue(sessionStorage, KEYS.resume) === "1") {
     start({ auto: true });
   }
-  console.log("✅ Magic Garden AutoFarm V15.2.2 geladen (Automationszentrale, ohne Fremdskripte).");
+  console.log("✅ Magic Garden AutoFarm V15.2.3 geladen (Automationszentrale, ohne Fremdskripte).");
 })();
