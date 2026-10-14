@@ -142,8 +142,8 @@ test('max-level boost coverage, not one-per-species keeping, identifies weaker e
  logged(s,'Peacock',['SellBoostI','SellBoostIV']);
  s.inventory.items=[
   p('weak','Bee',{abilities:['SellBoostI'],targetScale:1.5,xp:1440*5}),
-  p('strong','Peacock',{abilities:['SellBoostI'],targetScale:1.7,xp:4800*30}),
-  p('veryStrong','Peacock',{abilities:['SellBoostI'],targetScale:2,xp:4800*30}),
+  p('strong','Peacock',{abilities:['SellBoostI'],targetScale:2.2,xp:4800*30}),
+  p('veryStrong','Peacock',{abilities:['SellBoostI'],targetScale:2.3,xp:4800*30}),
   p('special','Peacock',{abilities:['SellBoostIV'],targetScale:1.5,xp:4800*5}),
  ];
  const report=run(s,'sellCrops');
