@@ -241,7 +241,7 @@ function createAutomationCore(env) {
     const v=obj(input)?input:{},out={...defaults};
     for(const key of ['enabled',...Object.keys(names)])out[key]=v[key]===true;
     out.seedSpecies=str(v.seedSpecies)?v.seedSpecies:'';
-    // Migration: V15.2.2 hatte genau einen gewaehlen Eiertyp. Dessen
+    // Migration: V15.2.1 hatte genau einen gewaehlen Eiertyp. Dessen
     // Erlaubnis darf beim Update nicht ungefragt auf ALLE Eier erweitert werden.
     // Frische Nutzer koennen dagegen direkt "Alle Eier im Inventar" waehlen.
     const legacyEgg = str(v.eggId) ? v.eggId : '';
