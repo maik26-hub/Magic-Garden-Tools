@@ -18,9 +18,10 @@ function createAutomationCore(env) {
     // Erlaubnis darf beim Update nicht ungefragt auf ALLE Eier erweitert werden.
     // Frische Nutzer koennen dagegen direkt "Alle Eier im Inventar" waehlen.
     const legacyEgg = str(v.eggId) ? v.eggId : '';
+    const hadLegacyEggSetting = Object.hasOwn(v,'eggId');
     out.eggPlaceMode = v.eggPlaceMode === 'selected' ? 'selected'
       : v.eggPlaceMode === 'all' ? 'all'
-      : legacyEgg ? 'selected' : 'all';
+      : hadLegacyEggSetting ? 'selected' : 'all';
     out.eggPlaceAllowed = cleanList(
       Array.isArray(v.eggPlaceAllowed) ? v.eggPlaceAllowed
         : legacyEgg ? [legacyEgg] : []
