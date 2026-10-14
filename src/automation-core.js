@@ -296,10 +296,20 @@ function createAutomationCore(env) {
     };
     const weatherIds = [...new Set([...Object.keys(weatherNames),...(s?[weather(s)]:[]),...arr(s?.game.weatherForecast).map(w=>w?.weatherId).filter(str)])];
     const eggChoices=catalogList('Egg',catalogs.eggs);
+    const ownedPets=s?[...arr(s.own.petSlots),...s.inventory.items,
+      ...arr(s.inventory.storages).flatMap(storage=>arr(storage?.items))]
+      .filter(p=>p?.itemType==='Pet'||arr(s.own.petSlots).includes(p)): [];
+    const eggSources=[...new Set(ownedPets.map(p=>p?.sourceEggId).filter(str))];
+    const eggOrigins=[...eggChoices,...eggSources
+      .filter(id=>!eggChoices.some(e=>e.id===id))
+      .map(id=>({id,name:human(id)}))];
+    const petSellOriginChoices=eggOrigins.map(e=>({...e,
+      name:e.name+' · '+ownedPets.filter(p=>p.sourceEggId===e.id).length+' eigene Pets'}));
     return {
       seeds:catalogList('Seed',catalogs.plants), eggs:eggChoices,
       eggFilterChoices:eggChoices.map(e=>({...e,
         name:e.name+' · '+(e.inventoryCount??0)+' im Inventar'})),
+      petSellOriginChoices,
       tools:catalogList('Tool',catalogs.tools), decor:catalogList('Decor',catalogs.decor),
       mutations:Object.entries(catalogs.mutations||{}).map(([id,m])=>({id,name:m.name||human(id)})).sort((a,b)=>a.name.localeCompare(b.name,'de')),
       weather:weatherIds.map(id=>({id,name:weatherNames[id]||human(id)})),
