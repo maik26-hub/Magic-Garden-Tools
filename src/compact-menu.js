@@ -52,7 +52,10 @@ function mountCompactMenu(ui) {
 #mg-autofarm-v13 .mg-menu-title {font:700 14px/1.2 system-ui,sans-serif!important;min-width:0;flex:1;display:flex;align-items:center;gap:7px;white-space:nowrap}
 #mg-autofarm-v13 .mg-dot {width:7px;height:7px;border-radius:50%;background:#a79c8c;display:inline-block;flex:none}
 #mg-autofarm-v13[data-running="true"] .mg-dot {background:#a4ca91;box-shadow:0 0 0 3px #a4ca9110}
-#mg-autofarm-v13 .mg-version {font:600 10px/1.3 ui-monospace,monospace;color:var(--mg-accent);padding:4px 7px;border-radius:10px;background:#354032;flex:none;white-space:nowrap}
+#mg-autofarm-v13.mg-compact a.mg-version {font:600 10px/1.3 ui-monospace,monospace!important;color:var(--mg-accent)!important;padding:4px 7px!important;border-radius:10px!important;background:#354032!important;border:1px solid transparent!important;flex:none;white-space:nowrap;text-decoration:none!important;box-shadow:none!important}
+#mg-autofarm-v13.mg-compact a.mg-version[data-update="available"] {color:#ffe5e5!important;background:#922d30!important;border-color:#e7666a!important;box-shadow:0 0 0 2px #e7666a23!important;animation:mg-update-flash 2.2s ease-in-out infinite}
+@keyframes mg-update-flash {50%{border-color:#ffd0d0;box-shadow:0 0 0 4px #e7666a16}}
+@media (prefers-reduced-motion:reduce) {#mg-autofarm-v13.mg-compact a.mg-version {animation:none!important}}
 #mg-autofarm-v13.mg-compact button,#mg-autofarm-v13.mg-compact a {font:600 12px/1.3 system-ui,sans-serif!important;color:var(--mg-text)!important;background:var(--mg-surface)!important;border:1px solid var(--mg-line)!important;border-radius:10px!important;min-width:0;padding:8px!important;cursor:pointer;box-shadow:0 2px 0 #19161155;transition:background .12s ease,border-color .12s ease;text-decoration:none}
 #mg-autofarm-v13.mg-compact button:hover,#mg-autofarm-v13.mg-compact a:hover {background:var(--mg-raised)!important;border-color:#8a795f!important}
 #mg-autofarm-v13.mg-compact button:disabled {cursor:default;opacity:.45}
@@ -112,7 +115,15 @@ function mountCompactMenu(ui) {
   grip.classList.add('mg-menu-grip'); grip.replaceChildren(svg('grip'));
   const dot = node('span', 'mg-dot'); const label = node('span', '', 'AutoFarm');
   headline.replaceChildren(dot, label);
-  const badge = node('span', 'mg-version', 'v' + version); header.insertBefore(badge, toggle);
+  // Clickable even when the update service is unreachable: Tampermonkey can
+  // still install from the official repo via its normal .user.js handler.
+  const badge = node('a', 'mg-version', 'v' + version);
+  badge.href = 'https://github.com/maik26-hub/Magic-Garden-Tools/raw/main/MagicGardenAutoFarm.user.js';
+  badge.target = '_blank'; badge.rel = 'noopener noreferrer';
+  badge.dataset.update = 'checking';
+  badge.setAttribute('aria-label', 'AutoFarm v' + version + ' – Update-Installation öffnen');
+  badge.title = 'Version v' + version + ' · Klicken zum Aktualisieren';
+  header.insertBefore(badge, toggle);
   toggle.classList.add('mg-menu-toggle'); toggle.replaceChildren(svg('chevron'));
   toggle.setAttribute('aria-controls', 'mg-menu-body');
   body.id = 'mg-menu-body'; body.classList.add('mg-menu-body');
@@ -155,12 +166,11 @@ function mountCompactMenu(ui) {
   // All original controls are MOVED, not copied, so their handlers and focus state survive.
   auto.views.protection.prepend(protectionToggles);
   const settingsView = node('div'); settingsView.append(settings, toggles);
-  const updates = node('div'); updates.append(node('p', 'mg-version-note', 'Installiert: v' + version), updateStatus, updateControls);
   const descriptors = [
     ['overview', 'Übersicht', overview], ['fields', 'Felder', fields], ['farming', 'Pflanzen', auto.views.farming],
     ['pets', 'Pets & Futter', auto.views.pets], ['shop', 'Einkauf', auto.views.shop], ['protection', 'Schutz', auto.views.protection],
     ['journal', 'Journal', auto.views.journal], ['teams', 'Wetter', auto.views.teams], ['automation', 'Autopilot', auto.views.automation],
-    ['settings', 'Einstellungen', settingsView], ['updates', 'Updates', updates], ['diagnostics', 'Diagnose', diagnostics],
+    ['settings', 'Einstellungen', settingsView], ['diagnostics', 'Diagnose', diagnostics],
   ];
   const views = new Map([['home', home]]); const shortcuts = new Map();
   scroll.appendChild(home);
@@ -216,8 +226,11 @@ function mountCompactMenu(ui) {
     metricValues.coins.title = data.coins;
     for (const [key, el] of Object.entries(statValues)) text(el, data[key]);
     text(homeState, data.connection); startButton.disabled = data.running || data.busy; stopButton.disabled = !data.running;
-    shortcuts.get('updates').dataset.new = String(!!data.update);
-    shortcuts.get('updates').title = data.update ? 'Update verfügbar: v' + data.update : 'Updates';
+    badge.dataset.update = data.update ? 'available' : 'current';
+    const description = data.update
+      ? 'Update verfügbar: v' + data.update + ' – Klicken zum Installieren'
+      : 'Installiert: v' + version + ' – Klicken zum Prüfen/Installieren in Tampermonkey';
+    badge.title = description; badge.setAttribute('aria-label', description);
   }
   let saved = 'home'; try { saved = storage.getItem(pageKey) || 'home'; } catch { /* use home */ }
   show(saved); setCollapsed(ui.collapsed);

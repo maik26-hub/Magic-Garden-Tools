@@ -392,12 +392,12 @@ test('official V14 preserves the original V13 update channel', () => {
 });
 
 
-test('manual V14 update check accepts only a newer standalone version and omits credentials', async () => {
+test('automatic version check accepts only a newer official version with fallback fetch', async () => {
   const h = createHarness();
-  h.setRemoteSource(source.replace('// @version      15.2.2',
-    '// @version      15.2.3'));
+  h.setRemoteSource(source.replace('// @version      15.2.3',
+    '// @version      15.2.4'));
   const result = await h.api.checkForUpdate(true);
-  assert.equal(result.newer, '15.2.3');
+  assert.equal(result.newer, '15.2.4');
   assert.match(result.status, /Update verfuegbar/);
   assert.ok(result.url.endsWith('/MagicGardenAutoFarm.user.js'));
   assert.equal(h.fetchCalls.length, 1);
@@ -407,11 +407,11 @@ test('manual V14 update check accepts only a newer standalone version and omits 
   assert.equal(h.fetchCalls[0].options.cache, 'no-store');
 });
 
-test('manual update check correctly reports already-current standalone release', async () => {
+test('version check correctly reports already-current release', async () => {
   const h = createHarness();
   const result = await h.api.checkForUpdate(true);
   assert.equal(result.newer, null);
-  assert.equal(result.status, 'Aktuell: V15.2.2');
+  assert.equal(result.status, 'Aktuell: V15.2.3');
 });
 
 test('manual update check rejects unrelated beta script even with higher version', async () => {
@@ -428,7 +428,7 @@ test('manual update check rejects unrelated beta script even with higher version
   assert.match(result.status, /Update-Check fehlgeschlagen/);
 });
 
-test('manual update check handles a blocked network request without false upgrades', async () => {
+test('version check handles a blocked network request without false upgrades', async () => {
   const h = createHarness();
   h.setFetchFailure(new Error('CORS'));
   const result = await h.api.checkForUpdate(true);
@@ -436,9 +436,9 @@ test('manual update check handles a blocked network request without false upgrad
   assert.match(result.status, /Update-Check fehlgeschlagen/);
 });
 
-test('manual update check reports remote older without downgrade', async () => {
+test('version check reports remote older without downgrade', async () => {
   const h = createHarness();
-  h.setRemoteSource(source.replace('// @version      15.2.2',
+  h.setRemoteSource(source.replace('// @version      15.2.3',
     '// @version      14.0.3'));
   const result = await h.api.checkForUpdate(true);
   assert.equal(result.newer, null);
@@ -460,7 +460,7 @@ test('same Tampermonkey identity as V13.2.3 upgrades the existing script', () =>
   const item = key => lines.find(line => line.startsWith('// @' + key + ' '))?.replace(/^\/\/ @\S+\s+/, '').trim();
   assert.equal(item('name'), 'Magic Garden AutoFarm');
   assert.equal(item('namespace'), 'mg-autofarm-local');
-  assert.equal(item('version'), '15.2.2');
+  assert.equal(item('version'), '15.2.3');
   const original = 'https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js';
   assert.equal(item('updateURL'), original);
   assert.equal(item('downloadURL'), original);
@@ -489,7 +489,7 @@ test('V13 preferences and Auto-Resume survive the V14 upgrade', async () => {
 
 test('V13 legacy checkForUpdate metadata sees V14 release as newer', () => {
   const candidate = source.match(/^\s*\/\/\s*@version\s+(\d+\.\d+\.\d+)\b/m)?.[1];
-  assert.equal(candidate, '15.2.2');
+  assert.equal(candidate, '15.2.3');
   const originalV13 = '13.2.3';
   const compare = (a, b) => {
     const left = a.split('.').map(Number), right = b.split('.').map(Number);
