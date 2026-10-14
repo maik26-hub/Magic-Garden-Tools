@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         Magic Garden AutoFarm
 // @namespace    mg-autofarm-local
-// @version      15.3.0
+// @version      15.3.1
 // @updateURL   https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js
 // @downloadURL https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js
-// @description  V15.3.0: smart Pet Advisor for boost, XP and Hutch comparison (read-only)
+// @description  V15.3.1: cross-species max-level boost decisions for keep/review (read-only)
 // @match        https://magicgarden.gg/*
 // @run-at       document-start
 // @grant        GM_xmlhttpRequest
@@ -430,7 +430,6 @@ function createPetAdvisor() {
     const teams=arr(s?.own?.petTeams);
     if(teams.some(t=>arr(t?.members).some(m=>m?.petId===pet.id)))reasons.push('Gespeichertes Team');
     if(arr(pet.mutations).length)reasons.push('Mutation');
-    if(!text(pet.sourceEggId))reasons.push('Herkunftsei unbekannt');
     const journal=s?.own?.journal?.pets?.[pet.petSpecies];
     if(!isObject(journal)||!Array.isArray(journal.abilitiesLogged)||
       !Array.isArray(journal.variantsLogged))reasons.push('Journal noch unvollständig/unklar');
@@ -441,6 +440,69 @@ function createPetAdvisor() {
       if(!variants.has('Normal'))reasons.push('Normalvariante im Journal fehlt');
     }
     return reasons;
+  }
+  // Long-term keep decisions are NOT based on species, rarity, current
+  // level, or the egg the pet came from. Evaluate max-level ability coverage
+  // across ALL farming team roles. Seasonal abilities get their matching
+  // weather when projecting long-term value so Frost pets are never labelled
+  // useless just because it is currently sunny.
+  const weathers=['Normal','Frost','Dawn','AmberMoon','Thunderstorm'];
+  const tierFactor=id=>/IV$/.test(id)?1.6:/III$/.test(id)?1.35:/II(?:_NEW)?$/.test(id)?1.15:1;
+  const abilityFamily=id=>id.replace(/(?:IV|III|II|I)(?:_NEW)?$/,'');
+  function maxAbilities(pet){
+    const result=new Map();
+    if(!pet.metrics||!pet.abilities.length)return null;
+    for(const id of pet.abilities){
+      if(abilityGroup(id)==='other')return null;
+      const weather=(conditional(id)||['Normal']).join('/');
+      const key=abilityFamily(id)+'@'+weather;
+      const power=tierFactor(id)*pet.metrics.max/100;
+      result.set(key,Math.max(result.get(key)||0,power));
+    }
+    return result;
+  }
+  function dominates(other,candidate){
+    if(other.id===candidate.id||!other.metrics||!candidate.metrics)return false;
+    const wanted=maxAbilities(candidate),offered=maxAbilities(other);
+    if(!wanted?.size||!offered?.size)return false;
+    let stronger=false;
+    for(const [ability,power] of wanted){
+      const better=offered.get(ability);
+      if(better===undefined||better+0.000001<power)return false;
+      if(better>power+0.000001)stronger=true;
+    }
+    // An otherwise equal extra ability is a genuine portfolio advantage.
+    // Equal max-level duplicates beyond the three reserved team slots are
+    // also redundant, so they may be *reviewed* (never automatically sold).
+    if([...offered.keys()].some(key=>!wanted.has(key)))stronger=true;
+    return stronger || offered.size===wanted.size;
+  }
+  function portfolio(profiles,catalogs){
+    const perGoal={},reserved=new Set(),bestRoles=new Map();
+    for(const goal of goals){
+      const candidates=profiles.map(p=>{
+        // Score at all relevant weather states; long-term retain is based on
+        // the BEST valid condition, not only today's active weather.
+        const projected=weathers.map(weather=>
+          profile({petSpecies:p.species,targetScale:p.targetScale,
+            xp:p.xp,abilities:p.abilities},catalogs.pets,catalogs.abilities,goal.id,weather));
+        const best=projected.reduce((a,b)=>
+          b.future.score>a.future.score?b:a);
+        return {pet:p,potential:best.future.score};
+      }).filter(x=>x.pet.metrics&&x.potential>0)
+        .sort((a,b)=>b.potential-a.potential||
+          b.pet.metrics.current-a.pet.metrics.current||
+          a.pet.id.localeCompare(b.pet.id));
+      const selected=candidates.slice(0,3);
+      perGoal[goal.id]=selected.map(x=>({id:x.pet.id,maxLevelScore:x.potential}));
+      for(const x of selected){
+        reserved.add(x.pet.id);
+        const earlier=bestRoles.get(x.pet.id);
+        if(!earlier||x.potential>earlier.score)
+          bestRoles.set(x.pet.id,{goal:goal.id,name:goal.name,score:x.potential});
+      }
+    }
+    return {perGoal,reserved,bestRoles};
   }
   function analyze(snapshot,catalogs={},goal='afk') {
     const profiles=[];
@@ -453,30 +515,57 @@ function createPetAdvisor() {
       const reasons=protectedReasons(pet,snapshot);
       profiles.push({id:pet.id,name:text(pet.name)||text(catalogs.pets?.[pet.petSpecies]?.name)||human(pet.petSpecies),
         species:pet.petSpecies,location:pet.location,sourceEggId:text(pet.sourceEggId)||null,
+        targetScale:pet.targetScale,xp:pet.xp,
         mutations:arr(pet.mutations).filter(text),abilities:report.abilities,
         abilityNames:report.abilityNames,now:report.now,future:report.future,metrics:report.metrics,
         rated:report.rated,hunger:finite(pet.hunger)?pet.hunger:null,
         teamMember:teamRefs.has(pet.id),protected:reasons.length>0,protection:reasons
       });
     }
-    // Unknown strength / unrecognized abilities are not silently rated as zero.
+    // Team suggestions can prioritize performance TODAY; the retain/sell
+    // decision instead prioritizes fully matured strength in every role.
     const eligible=profiles.filter(p=>p.rated).sort((a,b)=>
-      b.now.score-a.now.score||b.future.score-a.future.score||a.name.localeCompare(b.name,'de'));
+      b.future.score-a.future.score||b.now.score-a.now.score||
+      a.name.localeCompare(b.name,'de'));
     const recommendations=eligible.slice(0,3);
-    const reviews=[];
+    const teamPlan=portfolio(profiles,catalogs);
+    const decisions=[],reviews=[];
     for(const candidate of profiles){
-      if(candidate.location!=='Inventar'||candidate.protected||!candidate.metrics||
-         !candidate.abilities.length)continue;
-      const peer=profiles.find(other=>
-        other.id!==candidate.id&&other.species===candidate.species&&
-        other.sourceEggId===candidate.sourceEggId&&other.sourceEggId!==null&&
-        other.metrics&&other.metrics.current>=candidate.metrics.current&&
-        other.metrics.max>=candidate.metrics.max&&
-        (other.metrics.current>candidate.metrics.current||other.metrics.max>candidate.metrics.max)&&
-        JSON.stringify([...other.abilities].sort())===JSON.stringify([...candidate.abilities].sort())&&
-        JSON.stringify([...other.mutations].sort())===JSON.stringify([...candidate.mutations].sort()));
-      if(peer)reviews.push({id:candidate.id,name:candidate.name,reason:'Schwächeres identisches Duplikat als '+peer.name,
-        comparedTo:peer.id});
+      const reserve=teamPlan.reserved.has(candidate.id);
+      const primary=teamPlan.bestRoles.get(candidate.id)||null;
+      const unknown=!candidate.metrics||!candidate.abilities.length||
+        candidate.abilities.some(id=>abilityGroup(id)==='other');
+      const hardProtection=candidate.protection.filter(reason=>
+        reason!=='Journal noch unvollständig/unklar'&&
+        reason!=='Ungesehene Fähigkeit'&&
+        reason!=='Normalvariante im Journal fehlt');
+      const peer=profiles.filter(p=>teamPlan.reserved.has(p.id))
+        .find(p=>dominates(p,candidate));
+      let kind,reason;
+      if(reserve){
+        kind='keep';reason='Eines der besten Max-Level-Pets für '+
+          (primary?.name||'ein Spezialteam');
+      }else if(hardProtection.length){
+        kind='keep';reason='Behalten: '+hardProtection.join(', ');
+      }else if(unknown){
+        kind='review';reason='Max-Level oder individuelle Boosts unklar – nicht automatisch aussortieren';
+      }else if(peer){
+        kind='review';reason='Max-Level/Boosts werden von '+peer.name+
+          ' abgedeckt. Manuell prüfen, bevor du das Pet verkaufst.';
+        reviews.push({id:candidate.id,name:candidate.name,reason,
+          comparedTo:peer.id,blockedBy:candidate.protection.slice()});
+      }else{
+        kind='keep';reason='Keine bessere Abdeckung seiner Fähigkeiten in den Spezialteams';
+      }
+      candidate.decision=kind;
+      candidate.decisionReason=reason;
+      candidate.bestRole=primary;
+      candidate.dominatedBy=peer?.id||null;
+      candidate.sellCandidate=kind==='review'&&!!peer;
+      candidate.autoSellAllowed=false; // Never send unverified pet-sale commands.
+      decisions.push({id:candidate.id,name:candidate.name,kind,reason,
+        dominatedBy:peer?.id||null,protected:candidate.protected,
+        suggestedSell:!!peer,autoSellAllowed:false});
     }
     return {goal:actualGoal,goalName:goals.find(g=>g.id===actualGoal).name,weather,
       count:profiles.length,locations:{
@@ -485,8 +574,11 @@ function createPetAdvisor() {
         hutch:profiles.filter(x=>x.location==='Pet Hutch').length
       },
       profiles,recommendations:recommendations.map(p=>p.id),
+      teamPlans:teamPlan.perGoal,decisions,
+      retained:decisions.filter(d=>d.kind==='keep').length,
+      pendingReview:decisions.filter(d=>d.kind==='review').length,
       reviews,readOnly:true,coverage:profiles.filter(x=>x.rated).length,
-      notice:'Relative, nicht garantierte Team-Bewertung. Verkaufsvorschläge sind nur zur manuellen Prüfung.'
+      notice:'Behalten nach Max-Level und individuellen Boosts über alle Teamziele. Verkaufsvorschläge nur manuell – kein Pet-Auto-Sell aktiv.'
     };
   }
   return {goals,analyze,abilityGroup,strength};
@@ -881,7 +973,7 @@ function mountAutomationUI(parent, engine, document) {
   // Smart Pet Advisor: observation only. Never sell, move, swap or unlock pets
   // through this panel until actual server commands and protection are verified.
   const advisorPanel=document.createElement('details');advisorPanel.className='mg-pet-advisor';advisorPanel.open=true;
-  const advisorHeading=document.createElement('summary');advisorHeading.textContent='Pet-Manager · Boost-Vergleich (Vorschau)';
+  const advisorHeading=document.createElement('summary');advisorHeading.textContent='Pet-Manager · Max-Level & Boosts';
   advisorPanel.appendChild(advisorHeading);
   const advisorGoal=document.createElement('select');advisorGoal.style.cssText=style;
   advisorGoal.setAttribute('aria-label','Welches Pet-Team optimieren?');
@@ -892,7 +984,7 @@ function mountAutomationUI(parent, engine, document) {
   row('Welches Pet-Team optimieren?',advisorGoal,advisorPanel).classList.add('mg-wide-choice');
   const advisorText=document.createElement('div');advisorText.className='mg-pet-advisor-results';
   advisorPanel.appendChild(advisorText);
-  explain('Nur Analyse: Keine Pets werden verkauft, verschoben oder automatisch ins Team eingesetzt. Ein hoher Vergleichswert ist eine relative Empfehlung, kein garantierter Bonus.',advisorPanel);
+  explain('Der Bot entscheidet nach Max-Level-Potenzial und tatsächlich vorhandenen Boosts über alle Spezialteams – nicht nach Tierart oder Seltenheit. Noch keine automatischen Pet-Verkäufe.',advisorPanel);
   pets.appendChild(advisorPanel);
   let lastPetSignature='';
   function refreshPetAdvisor(){
@@ -910,13 +1002,44 @@ function mountAutomationUI(parent, engine, document) {
       'Pets: '+report.count+' · Aktiv: '+report.locations.active+
       ' · Inventar: '+report.locations.inventory+' · Pet Hutch: '+report.locations.hutch+
       ' · Wetter: '+report.weather));
+    advisorText.appendChild(make('h4','Behalten oder aussortieren?'));
     if(!report.count){
       advisorText.appendChild(make('p','Noch keine eigenen Pet-Daten. Warte auf den Spielzustand.'));
       return;
     }
     advisorText.appendChild(make('p',
       'Bewertbar: '+report.coverage+'/'+report.count+
-      ' · Fehlende Kataloge, XP oder Fähigkeiten werden nicht geraten.'));
+      ' · Behalten: '+report.retained+
+      ' · Prüfen: '+report.pendingReview+
+      ' · Fehlende XP/Boost-Daten werden nicht geraten.'));
+    const decisions=document.createElement('details');
+    decisions.className='mg-pet-advisor-decisions';decisions.open=true;
+    decisions.appendChild(make('summary',
+      'Max-Level-Entscheidungen für '+report.profiles.length+' Pets'));
+    // Unklare oder gegenüber besseren Boosts schwächere Pets zuerst zeigen.
+    const ordered=[...report.profiles].sort((a,b)=>
+      (a.decision==='review'?0:1)-(b.decision==='review'?0:1)||
+      a.name.localeCompare(b.name,'de'));
+    for(const pet of ordered){
+      const item=make('article','');item.className='mg-pet-decision';
+      item.dataset.petDecision=pet.decision;
+      const verdict=pet.decision==='keep'?'Behalten':'Prüfen';
+      item.appendChild(make('strong',
+        verdict+' · '+pet.name+' · '+pet.location));
+      item.appendChild(make('div',pet.metrics
+        ? 'Aktuell STR '+pet.metrics.current+' · Auf Max-Level STR '+pet.metrics.max+
+          ' (Level '+pet.metrics.progress+'/30)'
+        : 'Max-Level unbekannt'));
+      item.appendChild(make('div',
+        'Boosts: '+(pet.abilityNames.join(', ')||'unbekannt')));
+      item.appendChild(make('small',pet.decisionReason||'Noch keine Entscheidung'));
+      if(pet.dominatedBy)
+        item.appendChild(make('small',
+          'Aussortier-Vorschlag, kein Auto-Sell. '+(pet.protection.length?
+          'Verkaufsschutz: '+pet.protection.join(', '):'Manuelle Prüfung erforderlich.')));
+      decisions.appendChild(item);
+    }
+    advisorText.appendChild(decisions);
     const recommended=new Set(report.recommendations);
     advisorText.appendChild(make('h4','Empfohlenes Team für '+report.goalName));
     const chosen=report.profiles.filter(p=>recommended.has(p.id))
@@ -948,8 +1071,8 @@ function mountAutomationUI(parent, engine, document) {
     }
     advisorText.appendChild(inventory);
     advisorText.appendChild(make('p',
-      'Duplikat-Vorschau: '+report.reviews.length+
-      ' eindeutige schwächere Kandidaten. Keine automatische Verkaufsfreigabe.'));
+      'Schwächere, durch bessere Max-Level-Boosts abgedeckte Pets: '+report.reviews.length+
+      ' · Keine automatische Verkaufsfreigabe.'));
   }
   advisorGoal.addEventListener('change',()=>{lastPetSignature='';refreshPetAdvisor();});
 
@@ -1490,7 +1613,7 @@ function mountFieldGrid(container, plan, onChange) {
   }
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-  const VERSION = "15.3.0";
+  const VERSION = "15.3.1";
   const UPDATE_URL = "https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js";
   const NUMBER_FIELDS = Object.freeze({
     sellThreshold: { min: 5, max: 200, step: 1 },
@@ -2894,5 +3017,5 @@ function mountFieldGrid(container, plan, onChange) {
   if (readValue(sessionStorage, KEYS.resume) === "1") {
     start({ auto: true });
   }
-  console.log("✅ Magic Garden AutoFarm V15.3.0 geladen (Automationszentrale, ohne Fremdskripte).");
+  console.log("✅ Magic Garden AutoFarm V15.3.1 geladen (Automationszentrale, ohne Fremdskripte).");
 })();

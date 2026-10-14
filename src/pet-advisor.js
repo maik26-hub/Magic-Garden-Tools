@@ -128,7 +128,6 @@ function createPetAdvisor() {
     const teams=arr(s?.own?.petTeams);
     if(teams.some(t=>arr(t?.members).some(m=>m?.petId===pet.id)))reasons.push('Gespeichertes Team');
     if(arr(pet.mutations).length)reasons.push('Mutation');
-    if(!text(pet.sourceEggId))reasons.push('Herkunftsei unbekannt');
     const journal=s?.own?.journal?.pets?.[pet.petSpecies];
     if(!isObject(journal)||!Array.isArray(journal.abilitiesLogged)||
       !Array.isArray(journal.variantsLogged))reasons.push('Journal noch unvollständig/unklar');
@@ -139,6 +138,69 @@ function createPetAdvisor() {
       if(!variants.has('Normal'))reasons.push('Normalvariante im Journal fehlt');
     }
     return reasons;
+  }
+  // Long-term keep decisions are NOT based on species, rarity, current
+  // level, or the egg the pet came from. Evaluate max-level ability coverage
+  // across ALL farming team roles. Seasonal abilities get their matching
+  // weather when projecting long-term value so Frost pets are never labelled
+  // useless just because it is currently sunny.
+  const weathers=['Normal','Frost','Dawn','AmberMoon','Thunderstorm'];
+  const tierFactor=id=>/IV$/.test(id)?1.6:/III$/.test(id)?1.35:/II(?:_NEW)?$/.test(id)?1.15:1;
+  const abilityFamily=id=>id.replace(/(?:IV|III|II|I)(?:_NEW)?$/,'');
+  function maxAbilities(pet){
+    const result=new Map();
+    if(!pet.metrics||!pet.abilities.length)return null;
+    for(const id of pet.abilities){
+      if(abilityGroup(id)==='other')return null;
+      const weather=(conditional(id)||['Normal']).join('/');
+      const key=abilityFamily(id)+'@'+weather;
+      const power=tierFactor(id)*pet.metrics.max/100;
+      result.set(key,Math.max(result.get(key)||0,power));
+    }
+    return result;
+  }
+  function dominates(other,candidate){
+    if(other.id===candidate.id||!other.metrics||!candidate.metrics)return false;
+    const wanted=maxAbilities(candidate),offered=maxAbilities(other);
+    if(!wanted?.size||!offered?.size)return false;
+    let stronger=false;
+    for(const [ability,power] of wanted){
+      const better=offered.get(ability);
+      if(better===undefined||better+0.000001<power)return false;
+      if(better>power+0.000001)stronger=true;
+    }
+    // An otherwise equal extra ability is a genuine portfolio advantage.
+    // Equal max-level duplicates beyond the three reserved team slots are
+    // also redundant, so they may be *reviewed* (never automatically sold).
+    if([...offered.keys()].some(key=>!wanted.has(key)))stronger=true;
+    return stronger || offered.size===wanted.size;
+  }
+  function portfolio(profiles,catalogs){
+    const perGoal={},reserved=new Set(),bestRoles=new Map();
+    for(const goal of goals){
+      const candidates=profiles.map(p=>{
+        // Score at all relevant weather states; long-term retain is based on
+        // the BEST valid condition, not only today's active weather.
+        const projected=weathers.map(weather=>
+          profile({petSpecies:p.species,targetScale:p.targetScale,
+            xp:p.xp,abilities:p.abilities},catalogs.pets,catalogs.abilities,goal.id,weather));
+        const best=projected.reduce((a,b)=>
+          b.future.score>a.future.score?b:a);
+        return {pet:p,potential:best.future.score};
+      }).filter(x=>x.pet.metrics&&x.potential>0)
+        .sort((a,b)=>b.potential-a.potential||
+          b.pet.metrics.current-a.pet.metrics.current||
+          a.pet.id.localeCompare(b.pet.id));
+      const selected=candidates.slice(0,3);
+      perGoal[goal.id]=selected.map(x=>({id:x.pet.id,maxLevelScore:x.potential}));
+      for(const x of selected){
+        reserved.add(x.pet.id);
+        const earlier=bestRoles.get(x.pet.id);
+        if(!earlier||x.potential>earlier.score)
+          bestRoles.set(x.pet.id,{goal:goal.id,name:goal.name,score:x.potential});
+      }
+    }
+    return {perGoal,reserved,bestRoles};
   }
   function analyze(snapshot,catalogs={},goal='afk') {
     const profiles=[];
@@ -151,30 +213,57 @@ function createPetAdvisor() {
       const reasons=protectedReasons(pet,snapshot);
       profiles.push({id:pet.id,name:text(pet.name)||text(catalogs.pets?.[pet.petSpecies]?.name)||human(pet.petSpecies),
         species:pet.petSpecies,location:pet.location,sourceEggId:text(pet.sourceEggId)||null,
+        targetScale:pet.targetScale,xp:pet.xp,
         mutations:arr(pet.mutations).filter(text),abilities:report.abilities,
         abilityNames:report.abilityNames,now:report.now,future:report.future,metrics:report.metrics,
         rated:report.rated,hunger:finite(pet.hunger)?pet.hunger:null,
         teamMember:teamRefs.has(pet.id),protected:reasons.length>0,protection:reasons
       });
     }
-    // Unknown strength / unrecognized abilities are not silently rated as zero.
+    // Team suggestions can prioritize performance TODAY; the retain/sell
+    // decision instead prioritizes fully matured strength in every role.
     const eligible=profiles.filter(p=>p.rated).sort((a,b)=>
-      b.now.score-a.now.score||b.future.score-a.future.score||a.name.localeCompare(b.name,'de'));
+      b.future.score-a.future.score||b.now.score-a.now.score||
+      a.name.localeCompare(b.name,'de'));
     const recommendations=eligible.slice(0,3);
-    const reviews=[];
+    const teamPlan=portfolio(profiles,catalogs);
+    const decisions=[],reviews=[];
     for(const candidate of profiles){
-      if(candidate.location!=='Inventar'||candidate.protected||!candidate.metrics||
-         !candidate.abilities.length)continue;
-      const peer=profiles.find(other=>
-        other.id!==candidate.id&&other.species===candidate.species&&
-        other.sourceEggId===candidate.sourceEggId&&other.sourceEggId!==null&&
-        other.metrics&&other.metrics.current>=candidate.metrics.current&&
-        other.metrics.max>=candidate.metrics.max&&
-        (other.metrics.current>candidate.metrics.current||other.metrics.max>candidate.metrics.max)&&
-        JSON.stringify([...other.abilities].sort())===JSON.stringify([...candidate.abilities].sort())&&
-        JSON.stringify([...other.mutations].sort())===JSON.stringify([...candidate.mutations].sort()));
-      if(peer)reviews.push({id:candidate.id,name:candidate.name,reason:'Schwächeres identisches Duplikat als '+peer.name,
-        comparedTo:peer.id});
+      const reserve=teamPlan.reserved.has(candidate.id);
+      const primary=teamPlan.bestRoles.get(candidate.id)||null;
+      const unknown=!candidate.metrics||!candidate.abilities.length||
+        candidate.abilities.some(id=>abilityGroup(id)==='other');
+      const hardProtection=candidate.protection.filter(reason=>
+        reason!=='Journal noch unvollständig/unklar'&&
+        reason!=='Ungesehene Fähigkeit'&&
+        reason!=='Normalvariante im Journal fehlt');
+      const peer=profiles.filter(p=>teamPlan.reserved.has(p.id))
+        .find(p=>dominates(p,candidate));
+      let kind,reason;
+      if(reserve){
+        kind='keep';reason='Eines der besten Max-Level-Pets für '+
+          (primary?.name||'ein Spezialteam');
+      }else if(hardProtection.length){
+        kind='keep';reason='Behalten: '+hardProtection.join(', ');
+      }else if(unknown){
+        kind='review';reason='Max-Level oder individuelle Boosts unklar – nicht automatisch aussortieren';
+      }else if(peer){
+        kind='review';reason='Max-Level/Boosts werden von '+peer.name+
+          ' abgedeckt. Manuell prüfen, bevor du das Pet verkaufst.';
+        reviews.push({id:candidate.id,name:candidate.name,reason,
+          comparedTo:peer.id,blockedBy:candidate.protection.slice()});
+      }else{
+        kind='keep';reason='Keine bessere Abdeckung seiner Fähigkeiten in den Spezialteams';
+      }
+      candidate.decision=kind;
+      candidate.decisionReason=reason;
+      candidate.bestRole=primary;
+      candidate.dominatedBy=peer?.id||null;
+      candidate.sellCandidate=kind==='review'&&!!peer;
+      candidate.autoSellAllowed=false; // Never send unverified pet-sale commands.
+      decisions.push({id:candidate.id,name:candidate.name,kind,reason,
+        dominatedBy:peer?.id||null,protected:candidate.protected,
+        suggestedSell:!!peer,autoSellAllowed:false});
     }
     return {goal:actualGoal,goalName:goals.find(g=>g.id===actualGoal).name,weather,
       count:profiles.length,locations:{
@@ -183,8 +272,11 @@ function createPetAdvisor() {
         hutch:profiles.filter(x=>x.location==='Pet Hutch').length
       },
       profiles,recommendations:recommendations.map(p=>p.id),
+      teamPlans:teamPlan.perGoal,decisions,
+      retained:decisions.filter(d=>d.kind==='keep').length,
+      pendingReview:decisions.filter(d=>d.kind==='review').length,
       reviews,readOnly:true,coverage:profiles.filter(x=>x.rated).length,
-      notice:'Relative, nicht garantierte Team-Bewertung. Verkaufsvorschläge sind nur zur manuellen Prüfung.'
+      notice:'Behalten nach Max-Level und individuellen Boosts über alle Teamziele. Verkaufsvorschläge nur manuell – kein Pet-Auto-Sell aktiv.'
     };
   }
   return {goals,analyze,abilityGroup,strength};

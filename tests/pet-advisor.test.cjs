@@ -122,34 +122,51 @@ test('pet mutations, favorites, team members, hutch and active pets are protecte
  }
  assert.equal(report.profiles.find(x=>x.id==='plain').protected,false);
 });
-test('source egg unknown blocks sell comparison; do not infer from species',()=>{
+test('egg provenance is not a retain rule; unknown source does not invent abilities',()=>{
  const s=sample();
  logged(s,'Bee',['SellBoostI']);
  s.inventory.items=[
-  p('weak','Bee',{sourceEggId:undefined,abilities:['SellBoostI']}),
-  p('strong','Bee',{sourceEggId:undefined,abilities:['SellBoostI'],xp:1440*20})
+  p('weak','Bee',{sourceEggId:undefined,abilities:['SellBoostI'],targetScale:1.4}),
+  p('better1','Bee',{sourceEggId:undefined,abilities:['SellBoostI'],targetScale:1.7}),
+  p('better2','Bee',{sourceEggId:undefined,abilities:['SellBoostI'],targetScale:1.8}),
+  p('better3','Bee',{sourceEggId:undefined,abilities:['SellBoostI'],targetScale:1.9}),
  ];
- assert.equal(run(s).reviews.length,0);
+ const r=run(s,'sellCrops');
+ assert.equal(r.profiles.find(x=>x.id==='weak').decision,'review');
+ assert.deepEqual(r.reviews.map(x=>x.id),['weak']);
+ assert.equal(r.readOnly,true);
 });
-test('only dominated duplicates with same actual rolled abilities and egg provenance are suggested',()=>{
+test('max-level boost coverage, not one-per-species keeping, identifies weaker extras',()=>{
  const s=sample();
  logged(s,'Bee',['SellBoostI']);
+ logged(s,'Peacock',['SellBoostI','SellBoostIV']);
  s.inventory.items=[
   p('weak','Bee',{abilities:['SellBoostI'],targetScale:1.5,xp:1440*5}),
-  p('strong','Bee',{abilities:['SellBoostI'],targetScale:1.7,xp:1440*30}),
-  p('special','Bee',{abilities:['SellBoostIV'],targetScale:1.5,xp:1440*5})
+  p('strong','Peacock',{abilities:['SellBoostI'],targetScale:2.2,xp:4800*30}),
+  p('veryStrong','Peacock',{abilities:['SellBoostI'],targetScale:2.3,xp:4800*30}),
+  p('special','Peacock',{abilities:['SellBoostIV'],targetScale:1.5,xp:4800*5}),
  ];
  const report=run(s,'sellCrops');
+ const weak=report.profiles.find(x=>x.id==='weak');
+ assert.equal(weak.decision,'review');
+ assert.ok(weak.dominatedBy);
  assert.deepEqual(report.reviews.map(x=>x.id),['weak']);
+ assert.equal(report.profiles.filter(x=>x.decision==='keep').length,3);
  assert.equal(report.readOnly,true);
 });
-test('journal-unknown abilities protect apparent duplicates against irreversible sale',()=>{
+test('journal uncertainty blocks automatic sale even for lower max-level pets',()=>{
  const s=sample();
  s.inventory.items=[
   p('weak','Bee',{abilities:['SellBoostI'],targetScale:1.5}),
-  p('strong','Bee',{abilities:['SellBoostI'],targetScale:1.7,xp:1440*30})
+  p('strong','Bee',{abilities:['SellBoostI'],targetScale:1.7,xp:1440*30}),
+  p('third','Bee',{abilities:['SellBoostI'],targetScale:1.8}),
+  p('fourth','Bee',{abilities:['SellBoostI'],targetScale:1.9})
  ];
- assert.equal(run(s).reviews.length,0);
+ const report=run(s,'sellCrops');
+ assert.equal(report.profiles.find(x=>x.id==='weak').decision,'review');
+ assert.equal(report.profiles.find(x=>x.id==='weak').protected,true);
+ assert.equal(report.decisions.find(x=>x.id==='weak').autoSellAllowed,false);
+ assert.equal(report.reviews.length,1);
 });
 test('read-only advisor never mutates inventory, team definitions, storage or game commands',()=>{
  const s=sample();
@@ -167,4 +184,89 @@ test('inapplicable or unrecognized ability is not treated as a bad pet',()=>{
  assert.equal(r.recommendations.length,0);
  assert.equal(r.profiles[0].rated,false);
  assert.equal(r.reviews.length,0);
+});
+test('max STR future beats an already levelled low-ceiling pet without species bias',()=>{
+ const s=sample();
+ logged(s,'Bee',['SellBoostI']);
+ logged(s,'Chicken',['SellBoostI']);
+ logged(s,'Turtle',['SellBoostI']);
+ logged(s,'Peacock',['SellBoostI']);
+ s.inventory.items=[
+  p('lowCeilingMaxLevel','Bee',{abilities:['SellBoostI'],targetScale:1.3,xp:1440*30}),
+  p('highCeilingLevel0','Chicken',{abilities:['SellBoostI'],targetScale:2.1,xp:0}),
+  p('third','Turtle',{abilities:['SellBoostI'],targetScale:2.0,xp:0}),
+  p('fourth','Peacock',{abilities:['SellBoostI'],targetScale:2.2,xp:0})
+ ];
+ const r=run(s,'sellCrops');
+ assert.equal(r.profiles.find(x=>x.id==='lowCeilingMaxLevel').decision,'review');
+ assert.equal(r.profiles.find(x=>x.id==='highCeilingLevel0').decision,'keep');
+ assert.ok(r.teamPlans.sellCrops.some(p=>p.id==='highCeilingLevel0'));
+});
+test('rare useful hatch-speed boost is kept despite unrelated stronger sale pets',()=>{
+ const s=sample();
+ s.inventory.items=[
+  p('hatcher','Bee',{abilities:['EggGrowthBoost'],targetScale:1.4}),
+  p('selling1','Chicken',{abilities:['SellBoostIV'],targetScale:2}),
+  p('selling2','Turtle',{abilities:['SellBoostIV'],targetScale:2.1}),
+  p('selling3','Peacock',{abilities:['SellBoostIV'],targetScale:2.2}),
+  p('selling4','Bee',{abilities:['SellBoostIV'],targetScale:1.9})
+ ];
+ const r=run(s,'sellCrops');
+ assert.equal(r.profiles.find(x=>x.id==='hatcher').decision,'keep');
+ assert.ok(r.teamPlans.hatchSpeed.some(p=>p.id==='hatcher'));
+});
+test('weather-specific winter boost retains long-term value even in normal weather',()=>{
+ const s=sample();
+ s.game.weather='Normal';
+ s.inventory.items=[
+  p('winter','Bee',{abilities:['SnowyEggGrowthBoost']}),
+  p('other1','Chicken',{abilities:['SellBoostIV']}),
+  p('other2','Turtle',{abilities:['SellBoostIV']}),
+  p('other3','Peacock',{abilities:['SellBoostIV']})
+ ];
+ const r=run(s,'sellCrops');
+ assert.equal(r.profiles.find(x=>x.id==='winter').now.score,0);
+ assert.equal(r.profiles.find(x=>x.id==='winter').decision,'keep');
+ assert.ok(r.teamPlans.hatchSpeed.some(p=>p.id==='winter'));
+});
+test('identical fourth boost and max STR is redundant, even with different species',()=>{
+ const s=sample();
+ s.inventory.items=[
+  p('a','Bee',{abilities:['SellBoostI'],targetScale:1.7}),
+  p('b','Bee',{abilities:['SellBoostI'],targetScale:1.7}),
+  p('c','Bee',{abilities:['SellBoostI'],targetScale:1.7}),
+  p('d','Bee',{abilities:['SellBoostI'],targetScale:1.7})
+ ];
+ const r=run(s,'sellCrops');
+ assert.equal(r.retained,3);
+ assert.equal(r.pendingReview,1);
+ assert.equal(r.reviews.length,1);
+ assert.ok(r.reviews[0].reason.includes('Max-Level'));
+});
+test('a pet with an extra distinct ability is not discarded by one higher STR boost',()=>{
+ const s=sample();
+ s.inventory.items=[
+  p('special','Bee',{abilities:['SellBoostI','EggGrowthBoost'],targetScale:1.4}),
+  p('strong1','Bee',{abilities:['SellBoostIV'],targetScale:1.9}),
+  p('strong2','Bee',{abilities:['SellBoostIV'],targetScale:1.9}),
+  p('strong3','Bee',{abilities:['SellBoostIV'],targetScale:1.9}),
+  p('strong4','Bee',{abilities:['SellBoostIV'],targetScale:1.9})
+ ];
+ const r=run(s,'sellCrops');
+ assert.equal(r.profiles.find(x=>x.id==='special').decision,'keep');
+});
+test('unknown rolled ability and missing max strength never trigger an automated sell',()=>{
+ const s=sample();
+ s.inventory.items=[
+  p('unknown','Bee',{abilities:['SellBoostI','FutureMystery'],targetScale:1.3}),
+  p('missing','Bee',{abilities:['SellBoostI'],targetScale:undefined}),
+  p('strong1','Bee',{abilities:['SellBoostIV'],targetScale:1.9}),
+  p('strong2','Bee',{abilities:['SellBoostIV'],targetScale:1.9}),
+  p('strong3','Bee',{abilities:['SellBoostIV'],targetScale:1.9}),
+  p('strong4','Bee',{abilities:['SellBoostIV'],targetScale:1.9})
+ ];
+ const r=run(s,'sellCrops');
+ assert.equal(r.profiles.find(x=>x.id==='unknown').decision,'review');
+ assert.equal(r.profiles.find(x=>x.id==='missing').decision,'review');
+ assert.ok(r.decisions.every(x=>!x.autoSellAllowed));
 });

@@ -66,7 +66,7 @@ function mountAutomationUI(parent, engine, document) {
   // Smart Pet Advisor: observation only. Never sell, move, swap or unlock pets
   // through this panel until actual server commands and protection are verified.
   const advisorPanel=document.createElement('details');advisorPanel.className='mg-pet-advisor';advisorPanel.open=true;
-  const advisorHeading=document.createElement('summary');advisorHeading.textContent='Pet-Manager · Boost-Vergleich (Vorschau)';
+  const advisorHeading=document.createElement('summary');advisorHeading.textContent='Pet-Manager · Max-Level & Boosts';
   advisorPanel.appendChild(advisorHeading);
   const advisorGoal=document.createElement('select');advisorGoal.style.cssText=style;
   advisorGoal.setAttribute('aria-label','Welches Pet-Team optimieren?');
@@ -77,7 +77,7 @@ function mountAutomationUI(parent, engine, document) {
   row('Welches Pet-Team optimieren?',advisorGoal,advisorPanel).classList.add('mg-wide-choice');
   const advisorText=document.createElement('div');advisorText.className='mg-pet-advisor-results';
   advisorPanel.appendChild(advisorText);
-  explain('Nur Analyse: Keine Pets werden verkauft, verschoben oder automatisch ins Team eingesetzt. Ein hoher Vergleichswert ist eine relative Empfehlung, kein garantierter Bonus.',advisorPanel);
+  explain('Der Bot entscheidet nach Max-Level-Potenzial und tatsächlich vorhandenen Boosts über alle Spezialteams – nicht nach Tierart oder Seltenheit. Noch keine automatischen Pet-Verkäufe.',advisorPanel);
   pets.appendChild(advisorPanel);
   let lastPetSignature='';
   function refreshPetAdvisor(){
@@ -95,13 +95,44 @@ function mountAutomationUI(parent, engine, document) {
       'Pets: '+report.count+' · Aktiv: '+report.locations.active+
       ' · Inventar: '+report.locations.inventory+' · Pet Hutch: '+report.locations.hutch+
       ' · Wetter: '+report.weather));
+    advisorText.appendChild(make('h4','Behalten oder aussortieren?'));
     if(!report.count){
       advisorText.appendChild(make('p','Noch keine eigenen Pet-Daten. Warte auf den Spielzustand.'));
       return;
     }
     advisorText.appendChild(make('p',
       'Bewertbar: '+report.coverage+'/'+report.count+
-      ' · Fehlende Kataloge, XP oder Fähigkeiten werden nicht geraten.'));
+      ' · Behalten: '+report.retained+
+      ' · Prüfen: '+report.pendingReview+
+      ' · Fehlende XP/Boost-Daten werden nicht geraten.'));
+    const decisions=document.createElement('details');
+    decisions.className='mg-pet-advisor-decisions';decisions.open=true;
+    decisions.appendChild(make('summary',
+      'Max-Level-Entscheidungen für '+report.profiles.length+' Pets'));
+    // Unklare oder gegenüber besseren Boosts schwächere Pets zuerst zeigen.
+    const ordered=[...report.profiles].sort((a,b)=>
+      (a.decision==='review'?0:1)-(b.decision==='review'?0:1)||
+      a.name.localeCompare(b.name,'de'));
+    for(const pet of ordered){
+      const item=make('article','');item.className='mg-pet-decision';
+      item.dataset.petDecision=pet.decision;
+      const verdict=pet.decision==='keep'?'Behalten':'Prüfen';
+      item.appendChild(make('strong',
+        verdict+' · '+pet.name+' · '+pet.location));
+      item.appendChild(make('div',pet.metrics
+        ? 'Aktuell STR '+pet.metrics.current+' · Auf Max-Level STR '+pet.metrics.max+
+          ' (Level '+pet.metrics.progress+'/30)'
+        : 'Max-Level unbekannt'));
+      item.appendChild(make('div',
+        'Boosts: '+(pet.abilityNames.join(', ')||'unbekannt')));
+      item.appendChild(make('small',pet.decisionReason||'Noch keine Entscheidung'));
+      if(pet.dominatedBy)
+        item.appendChild(make('small',
+          'Aussortier-Vorschlag, kein Auto-Sell. '+(pet.protection.length?
+          'Verkaufsschutz: '+pet.protection.join(', '):'Manuelle Prüfung erforderlich.')));
+      decisions.appendChild(item);
+    }
+    advisorText.appendChild(decisions);
     const recommended=new Set(report.recommendations);
     advisorText.appendChild(make('h4','Empfohlenes Team für '+report.goalName));
     const chosen=report.profiles.filter(p=>recommended.has(p.id))
@@ -133,8 +164,8 @@ function mountAutomationUI(parent, engine, document) {
     }
     advisorText.appendChild(inventory);
     advisorText.appendChild(make('p',
-      'Duplikat-Vorschau: '+report.reviews.length+
-      ' eindeutige schwächere Kandidaten. Keine automatische Verkaufsfreigabe.'));
+      'Schwächere, durch bessere Max-Level-Boosts abgedeckte Pets: '+report.reviews.length+
+      ' · Keine automatische Verkaufsfreigabe.'));
   }
   advisorGoal.addEventListener('change',()=>{lastPetSignature='';refreshPetAdvisor();});
 

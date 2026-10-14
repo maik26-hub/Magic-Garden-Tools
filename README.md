@@ -1,14 +1,18 @@
-# Magic Garden AutoFarm — V15.3.0
+# Magic Garden AutoFarm — V15.3.1
 
 Eigenständiges Tampermonkey-Skript für Magic Garden. Inoffizielles Community-Projekt, nicht mit dem Spiel verbunden.
 
-## Smart Pet Advisor (V15.3.0)
+## Smart Pet Advisor (V15.3.1)
 
 Unter **Pets & Futter → Pet-Manager · Boost-Vergleich** findest du eine **rein lesende** Auswertung aus eigenem Inventar, den bis zu drei aktiven Pets und dem **Pet Hutch**. Ziel auswählen: Verkauf von Pflanzen, AFK, Hatch-Qualität, Hatch-Speed, Pflanzenwachstum, Crop-Mutationen/-Größe, Pet-Leveln oder Verkauf von Pets/Magic Dust.
 
 Der Manager wertet **nur die tatsächlich am Pet gespeicherten Abilities** aus, nicht alle Fähigkeiten, die seine Art theoretisch bekommen könnte. Aktuelle Stärke, MAX STR und verbleibende Stufen werden aus `xp`, `targetScale` und den Pet-Katalogdaten (`maxScale`, `hoursToMature`) ermittelt. Für passende Ziele wird eine **relative, ausdrücklich heuristische** Priorisierung der Boosts angezeigt; gleiche Abilities werden nach aktueller Stärke und zukünftigem Potenzial verglichen. Wettergebundene Abilities erhalten außerhalb des passenden Wetters keine aktive Bewertung. Unbekannte Abilities oder fehlende XP/Katalogdaten werden **nicht als Nullstärke interpretiert**.
 
-**Keine automatischen Pet-Verkäufe:** Die Liste „schwächere Duplikate“ ist nur eine vorsichtige Vorschau: gleiche Spezies, nachgewiesene gleiche Ei-Herkunft, exakt dieselben Abilities und Mutationen, klar schlechtere aktuelle/maximale Stärke, Inventar-Pet und keine Schutz-/Journalgründe. Favoriten, gesperrte, aktive, Pet-Hutch-/Team-Pets, Mutationen und unklare Journalstände bleiben geschützt. Verkaufs- und Teamswap-Befehle werden von diesem Modul **nicht** gesendet. Es ist noch **kein fertiger Auto-Pet-Sell**, da wir dafür Native-Protokoll und echte Spieldaten separat prüfen müssen.
+**Neu in V15.3.1: Max-Level entscheidet – nicht die Pet-Art.** Der Manager vergleicht jedes Pet mit potenziellen Spezialteams für alle acht Rollen: aktuelle und maximale Stärke, auf Max-Level hochgerechneter Boost, konkrete Fähigkeiten/Tier und wettergebundene Fähigkeiten. Für jedes Ziel reserviert er die bis zu drei langfristig stärksten sinnvollen Pets, auch **artübergreifend**. Ein Pet mit einer einzigartigen Fähigkeit für Egg-Hatch oder Plant-Growth bleibt unabhängig von seiner Art interessant. Es gibt **keine Regel „behalte zwingend ein Pet jeder Art“**.
+
+Die Anzeige unterscheidet **„Behalten“** (wichtiges Spezialteam, besondere Fähigkeit oder geschütztes Pet) und **„Prüfen“** (fehlende Daten oder ein nach Max-Level-Boosts von anderen Pets übertroffenes Exemplar). Gleichwertige vierte Pets können als Überbestand erkannt werden. Die Scores sind relative **Heuristiken**, keine gesicherten Spiel-Berechnungen; unbekannte Fähigkeiten werden niemals als wertlos eingestuft.
+
+**Noch kein automatischer Pet-Verkauf:** Trotz Behalten-/Aussortieren-Einschätzung bleiben Verkäufe und Pet-Swaps deaktiviert. Favoriten, gesperrte, aktive, Pet-Hutch-/Team-Pets und Mutationen werden ausdrücklich geschützt; unsichere Journalstände sind zusätzliche Prüfsperren. Zum tatsächlichen Auto-Sell müssen native Verkaufsbefehle und die Schutzbedingungen zuerst verifiziert werden.
 
 Die <https://magicgarden.wiki/Pets> und <https://magicgarden.wiki/Abilities> dienen zur Orientierung. Werte und Abilities werden nach Möglichkeit aus den aktuellen **individuellen** Spieldaten gelesen. Die Wiki-Tabelle allein lässt weder die am konkreten Pet gewürfelte Fähigkeit noch seine Max Strength erkennen.
 
