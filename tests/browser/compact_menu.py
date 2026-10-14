@@ -90,6 +90,7 @@ with sync_playwright() as p:
     ok('navigation alone never starts the bot or purchases',page.evaluate('window.__sent.length')==0)
     page.get_by_role('button',name='Pets & Futter',exact=True).click()
     advisor=page.get_by_label('Welches Pet-Team optimieren?',exact=True)
+    print('PET_ADVISOR_DEBUG',{'goalCount':advisor.count(),'goalVisible':advisor.is_visible(),'detailCount':page.locator('.mg-pet-advisor').count(),'detailVisible':page.locator('.mg-pet-advisor').is_visible(),'summaryVisible':page.get_by_text('Pet-Manager · Boost-Vergleich (Vorschau)').is_visible(),'petsViewVisible':page.locator('#mg-view-pets').is_visible()},flush=True)
     ok('read-only smart pet advisor available in existing Pets section',advisor.is_visible() and page.get_by_text('Pet-Manager · Boost-Vergleich (Vorschau)').is_visible())
     advisor.select_option('hatchSpeed')
     ok('pet optimization goal changes without any game command',advisor.input_value()=='hatchSpeed' and page.evaluate('window.__sent.length')==0)
