@@ -136,7 +136,7 @@ with sync_playwright() as p:
     page.keyboard.press('F8');page.wait_for_timeout(200)
     ok('F8 Stop remains functional',not page.evaluate('MGAutoFarmV13.state.running'))
     page.evaluate('Object.assign(MGAutoFarmV13.state,{harvested:40,sold:4,coins:12345})')
-    page.get_by_role('button',name='Übersicht',exact=True).click();page.get_by_role('button',name='Session zurücksetzen',exact=True).click()
+    page.get_by_role('button',name='Zur Übersicht',exact=True).click();page.get_by_role('button',name='Übersicht',exact=True).click();page.get_by_role('button',name='Session zurücksetzen',exact=True).click()
     ok('session reset retains its original handler',page.evaluate('MGAutoFarmV13.state.harvested+MGAutoFarmV13.state.sold+MGAutoFarmV13.state.coins')==0)
     # Scrolled header drag persists and remains reachable.
     page.get_by_role('button',name='Zur Übersicht',exact=True).click()
