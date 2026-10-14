@@ -147,6 +147,15 @@ test('saved v15.2.1 single egg migrates to selected placement without broadening
   await h.core.step();
   assert.deepEqual(h.calls,[{type:'GrowEgg',slot:0,eggId:'CommonEgg'}]);
 });
+test('legacy egg placement enabled with NO selected type remains blocked on update',async()=>{
+  const h=await fixture({saved:{enabled:true,eggs:true,eggId:''}});
+  h.s.inventory.items=[egg('RareEgg',4)];
+  const c=h.core.getConfig();
+  assert.equal(c.eggPlaceMode,'selected');
+  assert.deepEqual(c.eggPlaceAllowed,[]);
+  assert.equal(await h.core.step(),false);
+  assert.deepEqual(h.calls,[]);
+});
 test('independent egg filters and mode persist through a new script instance',async()=>{
   const h=await fixture();h.enable({
     eggs:true,eggPlaceMode:'selected',eggPlaceAllowed:['RareEgg','CommonEgg'],
