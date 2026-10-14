@@ -21,6 +21,16 @@ function mountAutomationUI(parent, engine, document) {
   function section(label){const d=document.createElement('details'),s=document.createElement('summary');d.open=true;d.className='mg-auto-section';s.textContent=label;s.style.cursor='pointer';d.appendChild(s);d.style.cssText='margin:10px 0;padding:8px 0;border-top:1px solid #355342';root.appendChild(d);return d;}
   function button(text,fn,where=root){const b=document.createElement('button');b.type='button';b.textContent=text;b.style.cssText=style+';cursor:pointer;margin:4px 4px 4px 0';b.addEventListener('click',fn);where.appendChild(b);return b;}
   function select(label,key,choiceKey,where=root){const input=document.createElement('select');input.style.cssText=style;row(label,input,where).classList.add('mg-wide-choice');input.dataset.mgSetting=key;selectors.push({input,key,choiceKey});input.addEventListener('change',()=>save({[key]:input.value}));return input;}
+  function eggModeSelect(label,key,options,where) {
+    const input=document.createElement('select');input.style.cssText=style;
+    input.dataset.mgSetting=key;
+    for(const [value,name] of options){const option=document.createElement('option');option.value=value;option.textContent=name;input.appendChild(option);}
+    input.value=config()[key];
+    input.addEventListener('change',()=>save({[key]:input.value}));
+    inputs.set(key,input);
+    row(label,input,where).classList.add('mg-wide-choice');
+    return input;
+  }
   function explain(text,where){const n=document.createElement('p');n.className='mg-choice-note';n.textContent=text;where.appendChild(n);return n;}
   check('Automationszentrale aktiv','enabled');
   button('Sicherer Autopilot',()=>save({enabled:true,favorite:true,claims:true,journal:true,feed:true,hatch:true,storage:true}));
@@ -29,10 +39,22 @@ function mountAutomationUI(parent, engine, document) {
   const farming=section('Pflanzen, Eier & Gießen');
   check('Leere grüne Felder bepflanzen','plant',farming);select('Saatgut','seedSpecies','seeds',farming);
   explain('Grün = Pflanzen. Nutzt vorhandene Samen; dieser Schalter kauft nichts.',farming);
-  check('Reife Eier auf blauen Feldern öffnen','hatch',farming);check('Leere blaue Felder mit Eiern füllen','eggs',farming);select('Ei','eggId','eggs',farming);
+  check('Reife Eier auf blauen Feldern öffnen','hatch',farming);
+  eggModeSelect('Welche Eier ausbrüten?','eggHatchMode',[
+    ['all','Alle reifen Eier auf blauen Feldern'],
+    ['selected','Nur ausgewählte Eiertypen']
+  ],farming);
+  const hatchFilter=pickers.multi(farming,'Eiertypen zum Ausbrüten','eggHatchAllowed','eggFilterChoices');
+  check('Leere blaue Felder mit Eiern füllen','eggs',farming);
+  eggModeSelect('Welche Eier platzieren?','eggPlaceMode',[
+    ['all','Alle verfügbaren Eier im Inventar'],
+    ['selected','Nur ausgewählte Eiertypen']
+  ],farming);
+  const placementFilter=pickers.multi(farming,'Eiertypen zum Platzieren','eggPlaceAllowed','eggFilterChoices');
+  explain('Platzieren und Ausbrüten haben eigene Filter. Blaue Felder aus „Felder“ verwenden. Favorisierte Eier werden nicht platziert.',farming);
   const fieldInfo=explain('Eierfelder in „Felder“ blau markieren. Grau wird ignoriert.',farming);
   check('Pflanzen auf grünen Feldern gießen','water',farming);number('Nur gießen ab Restzeit (Sek.)','waterMinSeconds',30,86400,farming);number('Gießkannen übrig lassen','toolReserve',0,99,farming);
-  dependent.push(['seedSpecies','plant'],['eggId','eggs'],['waterMinSeconds','water'],['toolReserve','water']);
+  dependent.push(['seedSpecies','plant'],['eggPlaceMode','eggs'],['eggHatchMode','hatch'],['waterMinSeconds','water'],['toolReserve','water']);
   const protection=section('Erntefilter & Wertschutz');
   check('Wertvolle Produkte favorisieren','favorite',protection);number('Favorisieren ab Basiswert (0 = aus)','keepValue',0,1e12,protection);
   list('Diese Pflanzenarten behalten','keepSpecies',protection);number('Ernten ab Größe (0 = alle)','minHarvestSize',0,100,protection);
@@ -94,6 +116,8 @@ function mountAutomationUI(parent, engine, document) {
     for(const [key,input]of inputs){if(document.activeElement===input)continue;if(input.type==='checkbox')input.checked=c[key];else input.value=Array.isArray(c[key])?c[key].join(', '):c[key];}
     for(const s of selectors)pickers.options(s.input,choices[s.choiceKey]||[],c[s.key]);
     for(const [key,toggle]of dependent){const item=inputs.get(key)||selectors.find(s=>s.key===key)?.input;if(item)item.closest('label').hidden=!c[toggle];}
+    hatchFilter.hidden=!c.hatch||c.eggHatchMode!=='selected';
+    placementFilter.hidden=!c.eggs||c.eggPlaceMode!=='selected';
     fieldInfo.textContent=choices.fields?`Felder: ${choices.fields.plant} grün für Pflanzen · ${choices.fields.egg} blau für Eier. Grau wird ignoriert.`:'Felder in „Felder“ grün oder blau markieren. Grau wird ignoriert.';
     pickers.refresh(choices);pickers.options(weatherInput,choices.weather,weatherInput.value,'Wetter wählen');pickers.options(teamSelect,choices.pets,teamSelect.value,'Team wählen');refreshBuy(choices);
     status.textContent='Kataloge: '+info.catalogs+'\nWetter: '+(choices.weather.find(w=>w.id===info.weather)?.name||info.weather)+'\nKäufe heute: '+info.spentToday.toLocaleString('de-DE')+' Coins'+'\n'+info.modules.filter(m=>m.on).map(m=>m.label+': '+m.confirmed+' · '+m.status).join('\n')+(info.sell?'\nVerkauf: '+info.sell:'');
