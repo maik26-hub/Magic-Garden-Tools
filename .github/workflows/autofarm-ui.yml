@@ -1,0 +1,40 @@
+name: AutoFarm UI
+on:
+  push:
+    branches: [main]
+    paths: ['MagicGardenAutoFarm.user.js', 'src/**', 'scripts/**', 'tests/browser/**', '.github/workflows/autofarm-ui.yml']
+  pull_request:
+    branches: [main]
+    paths: ['MagicGardenAutoFarm.user.js', 'src/**', 'scripts/**', 'tests/browser/**', '.github/workflows/autofarm-ui.yml']
+permissions:
+  contents: read
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check distributed bundle is reproducible
+        run: |
+          node scripts/build.cjs
+          git diff --exit-code -- MagicGardenAutoFarm.user.js
+      - name: Install Chromium test dependencies
+        run: |
+          python -m pip install playwright==1.57.0
+          python -m playwright install --with-deps chromium
+      - name: Exercise the real DOM with mocked game data (no account access)
+        run: |
+          export CHROMIUM_PATH="$(python -c 'from playwright.sync_api import sync_playwright; p=sync_playwright().start(); print(p.chromium.executable_path); p.stop()')"
+          python tests/browser/compact_menu.py
+      - name: Save screenshots and assertion report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: autofarm-ui-checks
+          path: test-output/
+          retention-days: 7

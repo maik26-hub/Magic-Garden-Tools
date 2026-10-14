@@ -1,7 +1,7 @@
 function mountAutomationUI(parent, engine, document) {
-  const root=document.createElement('details'); root.id='mg15-automation'; root.open=true;
+  const root=document.createElement('section'); root.id='mg15-automation'; root.className='mg-auto-intro';
   root.style.cssText='border-top:1px solid #355342;margin-top:12px;padding-top:10px';
-  const summary=document.createElement('summary');summary.textContent='Automationszentrale · V15';
+  const summary=document.createElement('h3');summary.textContent='Automationszentrale · V15';
   summary.style.cssText='font-weight:bold;cursor:pointer';root.appendChild(summary);
   const note=document.createElement('p');note.textContent='Neue Aktionen sind zunächst aus. Module einzeln freigeben. Käufe benötigen Auswahlliste, Preislimit, Tagesbudget und Coin-Reserve. Keine Credits, Trades oder Pet-Verkäufe.';
   note.style.cssText='font-size:11px;line-height:1.5;color:#a8b9ae';root.appendChild(note);
@@ -12,12 +12,12 @@ function mountAutomationUI(parent, engine, document) {
   const config=()=>engine.getConfig();
   function save(patch){try{engine.configure(patch);alert.textContent='Gespeichert';refresh();}catch(e){alert.textContent=e.message;}}
   function row(label,element,where=root){element.setAttribute('aria-label',label);const r=document.createElement('label');r.style.cssText='display:flex;justify-content:space-between;align-items:center;gap:8px;margin:7px 0;font-size:12px';const text=document.createElement('span');text.textContent=label;r.append(text,element);where.appendChild(r);return r;}
-  function check(label,key,where=root){const input=document.createElement('input');input.type='checkbox';input.checked=config()[key];input.addEventListener('change',()=>save({[key]:input.checked}));inputs.set(key,input);row(label,input,where);}
-  function number(label,key,min,max,where=root){const input=document.createElement('input');input.type='number';input.min=min;input.max=max;input.step='1';input.value=config()[key];input.style.cssText=style+';width:115px';input.addEventListener('change',()=>{const n=Number(input.value);if(Number.isFinite(n))save({[key]:n});});inputs.set(key,input);row(label,input,where);return input;}
-  function list(label,key,where=root){const input=document.createElement('input');input.value=config()[key].join(', ');input.placeholder='IDs, mit Komma getrennt';input.style.cssText=style;input.addEventListener('change',()=>save({[key]:input.value.split(',').map(x=>x.trim()).filter(Boolean)}));inputs.set(key,input);row(label,input,where);}
-  function section(label){const d=document.createElement('details'),s=document.createElement('summary');s.textContent=label;s.style.cursor='pointer';d.appendChild(s);d.style.cssText='margin:10px 0;padding:8px 0;border-top:1px solid #355342';root.appendChild(d);return d;}
+  function check(label,key,where=root){const input=document.createElement('input');input.type='checkbox';input.checked=config()[key];input.addEventListener('change',()=>save({[key]:input.checked}));input.dataset.mgSetting=key;inputs.set(key,input);row(label,input,where);}
+  function number(label,key,min,max,where=root){const input=document.createElement('input');input.type='number';input.min=min;input.max=max;input.step='1';input.value=config()[key];input.style.cssText=style+';width:115px';input.addEventListener('change',()=>{const n=Number(input.value);if(Number.isFinite(n))save({[key]:n});});input.dataset.mgSetting=key;inputs.set(key,input);row(label,input,where);return input;}
+  function list(label,key,where=root){const input=document.createElement('input');input.value=config()[key].join(', ');input.placeholder='IDs, mit Komma getrennt';input.style.cssText=style;input.addEventListener('change',()=>save({[key]:input.value.split(',').map(x=>x.trim()).filter(Boolean)}));input.dataset.mgSetting=key;inputs.set(key,input);row(label,input,where);}
+  function section(label){const d=document.createElement('details'),s=document.createElement('summary');d.open=true;d.className='mg-auto-section';s.textContent=label;s.style.cursor='pointer';d.appendChild(s);d.style.cssText='margin:10px 0;padding:8px 0;border-top:1px solid #355342';root.appendChild(d);return d;}
   function button(text,fn,where=root){const b=document.createElement('button');b.type='button';b.textContent=text;b.style.cssText=style+';cursor:pointer;margin:4px 4px 4px 0';b.addEventListener('click',fn);where.appendChild(b);return b;}
-  function select(label,key,choiceKey,where=root){const input=document.createElement('select');input.style.cssText=style;row(label,input,where);selectors.push({input,key,choiceKey});input.addEventListener('change',()=>save({[key]:input.value}));return input;}
+  function select(label,key,choiceKey,where=root){const input=document.createElement('select');input.style.cssText=style;row(label,input,where);input.dataset.mgSetting=key;selectors.push({input,key,choiceKey});input.addEventListener('change',()=>save({[key]:input.value}));return input;}
   check('Automationszentrale aktiv','enabled');
   button('Sicherer Autopilot',()=>save({enabled:true,favorite:true,claims:true,journal:true,feed:true,hatch:true,storage:true}));
   button('Neue Module aus',()=>save({enabled:false}));
@@ -50,9 +50,9 @@ function mountAutomationUI(parent, engine, document) {
   const buyList=document.createElement('div');shop.appendChild(buyList);
   button('Kaufregel hinzufügen',()=>{if(!buyId.value||!Number.isFinite(Number(maxPrice.value))||Number(maxPrice.value)<0){alert.textContent='Artikel und Preislimit fehlen';return;}const r={type:buyType.value,id:buyId.value,shop:shopId.value,maxPrice:Number(maxPrice.value),perRestock:Number(perRestock.value),maxOwned:Number(maxOwned.value)};save({buyRules:[...config().buyRules.filter(x=>!(x.type===r.type&&x.id===r.id&&x.shop===r.shop)),r]});},shop);
   const budgetNote=document.createElement('small');budgetNote.textContent='Nur Coins, nie Credits. Ausgaben werden VOR dem Senden reserviert, auch bei unbekannter Antwort. Tagesbudget überlebt F5 und Session-Reset. Ohne Browser-Kaufsperre oder verifizierten Preis keine Käufe.';shop.appendChild(budgetNote);
-  root.appendChild(status);const preview=document.createElement('pre');preview.style.cssText=status.style.cssText;root.appendChild(preview);
-  button('Plan prüfen (sendet nichts)',()=>{preview.textContent=engine.preview().map(x=>x.module+': '+x.action).join('\n')||'Keine ausführbare Aktion / Spieldaten noch nicht bereit';});
-  button('Status kopieren',()=>{const text=JSON.stringify(engine.status(),null,2);navigator.clipboard?.writeText(text).then(()=>alert.textContent='Status kopiert',()=>alert.textContent='Kopieren im Browser nicht erlaubt');});
+  const diagnostics=document.createElement('div');diagnostics.appendChild(status);root.appendChild(diagnostics);const preview=document.createElement('pre');preview.style.cssText=status.style.cssText;diagnostics.appendChild(preview);
+  button('Plan prüfen (sendet nichts)',()=>{preview.textContent=engine.preview().map(x=>x.module+': '+x.action).join('\n')||'Keine ausführbare Aktion / Spieldaten noch nicht bereit';},diagnostics);
+  button('Status kopieren',async()=>{try {await navigator.clipboard.writeText(JSON.stringify(engine.status(),null,2));alert.textContent='Status kopiert';}catch{alert.textContent='Kopieren im Browser nicht erlaubt';}},diagnostics);
   parent.appendChild(root);let lastSignature='';
   function options(input,values,current){const ids=values.map(x=>typeof x==='string'?x:x.id),sig=ids.join('|');if(input.dataset.options===sig)return;input.dataset.options=sig;input.textContent='';input.add(new Option('Bitte wählen',''));for(const value of values)input.add(new Option(typeof value==='string'?value:value.name,typeof value==='string'?value:value.id));input.value=current||'';}
   function refresh(){
@@ -63,6 +63,6 @@ function mountAutomationUI(parent, engine, document) {
     status.textContent='Kataloge: '+info.catalogs+'\nWetter: '+info.weather+'\nReservierte Ausgaben heute: '+info.spentToday.toLocaleString('de-DE')+' / '+info.budget.toLocaleString('de-DE')+'\n'+info.modules.filter(m=>m.on).map(m=>m.label+': '+m.confirmed+' · '+m.status).join('\n')+(info.sell?'\nVerkauf: '+info.sell:'');
     const sig=JSON.stringify([c.buyRules,c.teamRules]);if(sig!==lastSignature){lastSignature=sig;buyList.textContent='';teamList.textContent='';c.buyRules.forEach((r,i)=>button(r.id+' @ '+r.shop+' ×'+r.perRestock+' · Entfernen',()=>save({buyRules:config().buyRules.filter((_,j)=>i!==j)}),buyList));c.teamRules.forEach((r,i)=>button(r.weather+' → '+(choices.pets.find(t=>t.id===r.teamId)?.name||'Team')+' · Entfernen',()=>save({teamRules:config().teamRules.filter((_,j)=>i!==j)}),teamList));}
   }
-  buyType.addEventListener('change',()=>{shopId.value={Seed:'seed',Egg:'egg',Tool:'tool',Decor:'decor'}[buyType.value];buyId.dataset.options='';refresh();});refresh();return {refresh,root};
+  buyType.addEventListener('change',()=>{shopId.value={Seed:'seed',Egg:'egg',Tool:'tool',Decor:'decor'}[buyType.value];buyId.dataset.options='';refresh();});refresh();return {refresh,root,alert,views:{automation:root,farming,protection,pets,journal:quests,teams,shop,diagnostics}};
 }
 if (typeof module !== 'undefined' && module.exports) module.exports={mountAutomationUI};

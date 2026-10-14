@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         Magic Garden AutoFarm
 // @namespace    mg-autofarm-local
-// @version      15.0.0
+// @version      15.1.0
 // @updateURL   https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js
 // @downloadURL https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js
-// @description  V15: modular automation for plants, pets, eggs, shops, storage, journal and daily rewards
+// @description  V15.1: compact icon menu with anchored header and scrollable sections; existing automation retained
 // @match        https://magicgarden.gg/*
 // @run-at       document-start
 // @grant        none
@@ -144,9 +144,9 @@ function createAutomationCore(env) {
 
 
 function mountAutomationUI(parent, engine, document) {
-  const root=document.createElement('details'); root.id='mg15-automation'; root.open=true;
+  const root=document.createElement('section'); root.id='mg15-automation'; root.className='mg-auto-intro';
   root.style.cssText='border-top:1px solid #355342;margin-top:12px;padding-top:10px';
-  const summary=document.createElement('summary');summary.textContent='Automationszentrale · V15';
+  const summary=document.createElement('h3');summary.textContent='Automationszentrale · V15';
   summary.style.cssText='font-weight:bold;cursor:pointer';root.appendChild(summary);
   const note=document.createElement('p');note.textContent='Neue Aktionen sind zunächst aus. Module einzeln freigeben. Käufe benötigen Auswahlliste, Preislimit, Tagesbudget und Coin-Reserve. Keine Credits, Trades oder Pet-Verkäufe.';
   note.style.cssText='font-size:11px;line-height:1.5;color:#a8b9ae';root.appendChild(note);
@@ -157,12 +157,12 @@ function mountAutomationUI(parent, engine, document) {
   const config=()=>engine.getConfig();
   function save(patch){try{engine.configure(patch);alert.textContent='Gespeichert';refresh();}catch(e){alert.textContent=e.message;}}
   function row(label,element,where=root){element.setAttribute('aria-label',label);const r=document.createElement('label');r.style.cssText='display:flex;justify-content:space-between;align-items:center;gap:8px;margin:7px 0;font-size:12px';const text=document.createElement('span');text.textContent=label;r.append(text,element);where.appendChild(r);return r;}
-  function check(label,key,where=root){const input=document.createElement('input');input.type='checkbox';input.checked=config()[key];input.addEventListener('change',()=>save({[key]:input.checked}));inputs.set(key,input);row(label,input,where);}
-  function number(label,key,min,max,where=root){const input=document.createElement('input');input.type='number';input.min=min;input.max=max;input.step='1';input.value=config()[key];input.style.cssText=style+';width:115px';input.addEventListener('change',()=>{const n=Number(input.value);if(Number.isFinite(n))save({[key]:n});});inputs.set(key,input);row(label,input,where);return input;}
-  function list(label,key,where=root){const input=document.createElement('input');input.value=config()[key].join(', ');input.placeholder='IDs, mit Komma getrennt';input.style.cssText=style;input.addEventListener('change',()=>save({[key]:input.value.split(',').map(x=>x.trim()).filter(Boolean)}));inputs.set(key,input);row(label,input,where);}
-  function section(label){const d=document.createElement('details'),s=document.createElement('summary');s.textContent=label;s.style.cursor='pointer';d.appendChild(s);d.style.cssText='margin:10px 0;padding:8px 0;border-top:1px solid #355342';root.appendChild(d);return d;}
+  function check(label,key,where=root){const input=document.createElement('input');input.type='checkbox';input.checked=config()[key];input.addEventListener('change',()=>save({[key]:input.checked}));input.dataset.mgSetting=key;inputs.set(key,input);row(label,input,where);}
+  function number(label,key,min,max,where=root){const input=document.createElement('input');input.type='number';input.min=min;input.max=max;input.step='1';input.value=config()[key];input.style.cssText=style+';width:115px';input.addEventListener('change',()=>{const n=Number(input.value);if(Number.isFinite(n))save({[key]:n});});input.dataset.mgSetting=key;inputs.set(key,input);row(label,input,where);return input;}
+  function list(label,key,where=root){const input=document.createElement('input');input.value=config()[key].join(', ');input.placeholder='IDs, mit Komma getrennt';input.style.cssText=style;input.addEventListener('change',()=>save({[key]:input.value.split(',').map(x=>x.trim()).filter(Boolean)}));input.dataset.mgSetting=key;inputs.set(key,input);row(label,input,where);}
+  function section(label){const d=document.createElement('details'),s=document.createElement('summary');d.open=true;d.className='mg-auto-section';s.textContent=label;s.style.cursor='pointer';d.appendChild(s);d.style.cssText='margin:10px 0;padding:8px 0;border-top:1px solid #355342';root.appendChild(d);return d;}
   function button(text,fn,where=root){const b=document.createElement('button');b.type='button';b.textContent=text;b.style.cssText=style+';cursor:pointer;margin:4px 4px 4px 0';b.addEventListener('click',fn);where.appendChild(b);return b;}
-  function select(label,key,choiceKey,where=root){const input=document.createElement('select');input.style.cssText=style;row(label,input,where);selectors.push({input,key,choiceKey});input.addEventListener('change',()=>save({[key]:input.value}));return input;}
+  function select(label,key,choiceKey,where=root){const input=document.createElement('select');input.style.cssText=style;row(label,input,where);input.dataset.mgSetting=key;selectors.push({input,key,choiceKey});input.addEventListener('change',()=>save({[key]:input.value}));return input;}
   check('Automationszentrale aktiv','enabled');
   button('Sicherer Autopilot',()=>save({enabled:true,favorite:true,claims:true,journal:true,feed:true,hatch:true,storage:true}));
   button('Neue Module aus',()=>save({enabled:false}));
@@ -195,9 +195,9 @@ function mountAutomationUI(parent, engine, document) {
   const buyList=document.createElement('div');shop.appendChild(buyList);
   button('Kaufregel hinzufügen',()=>{if(!buyId.value||!Number.isFinite(Number(maxPrice.value))||Number(maxPrice.value)<0){alert.textContent='Artikel und Preislimit fehlen';return;}const r={type:buyType.value,id:buyId.value,shop:shopId.value,maxPrice:Number(maxPrice.value),perRestock:Number(perRestock.value),maxOwned:Number(maxOwned.value)};save({buyRules:[...config().buyRules.filter(x=>!(x.type===r.type&&x.id===r.id&&x.shop===r.shop)),r]});},shop);
   const budgetNote=document.createElement('small');budgetNote.textContent='Nur Coins, nie Credits. Ausgaben werden VOR dem Senden reserviert, auch bei unbekannter Antwort. Tagesbudget überlebt F5 und Session-Reset. Ohne Browser-Kaufsperre oder verifizierten Preis keine Käufe.';shop.appendChild(budgetNote);
-  root.appendChild(status);const preview=document.createElement('pre');preview.style.cssText=status.style.cssText;root.appendChild(preview);
-  button('Plan prüfen (sendet nichts)',()=>{preview.textContent=engine.preview().map(x=>x.module+': '+x.action).join('\n')||'Keine ausführbare Aktion / Spieldaten noch nicht bereit';});
-  button('Status kopieren',()=>{const text=JSON.stringify(engine.status(),null,2);navigator.clipboard?.writeText(text).then(()=>alert.textContent='Status kopiert',()=>alert.textContent='Kopieren im Browser nicht erlaubt');});
+  const diagnostics=document.createElement('div');diagnostics.appendChild(status);root.appendChild(diagnostics);const preview=document.createElement('pre');preview.style.cssText=status.style.cssText;diagnostics.appendChild(preview);
+  button('Plan prüfen (sendet nichts)',()=>{preview.textContent=engine.preview().map(x=>x.module+': '+x.action).join('\n')||'Keine ausführbare Aktion / Spieldaten noch nicht bereit';},diagnostics);
+  button('Status kopieren',async()=>{try {await navigator.clipboard.writeText(JSON.stringify(engine.status(),null,2));alert.textContent='Status kopiert';}catch{alert.textContent='Kopieren im Browser nicht erlaubt';}},diagnostics);
   parent.appendChild(root);let lastSignature='';
   function options(input,values,current){const ids=values.map(x=>typeof x==='string'?x:x.id),sig=ids.join('|');if(input.dataset.options===sig)return;input.dataset.options=sig;input.textContent='';input.add(new Option('Bitte wählen',''));for(const value of values)input.add(new Option(typeof value==='string'?value:value.name,typeof value==='string'?value:value.id));input.value=current||'';}
   function refresh(){
@@ -208,12 +208,240 @@ function mountAutomationUI(parent, engine, document) {
     status.textContent='Kataloge: '+info.catalogs+'\nWetter: '+info.weather+'\nReservierte Ausgaben heute: '+info.spentToday.toLocaleString('de-DE')+' / '+info.budget.toLocaleString('de-DE')+'\n'+info.modules.filter(m=>m.on).map(m=>m.label+': '+m.confirmed+' · '+m.status).join('\n')+(info.sell?'\nVerkauf: '+info.sell:'');
     const sig=JSON.stringify([c.buyRules,c.teamRules]);if(sig!==lastSignature){lastSignature=sig;buyList.textContent='';teamList.textContent='';c.buyRules.forEach((r,i)=>button(r.id+' @ '+r.shop+' ×'+r.perRestock+' · Entfernen',()=>save({buyRules:config().buyRules.filter((_,j)=>i!==j)}),buyList));c.teamRules.forEach((r,i)=>button(r.weather+' → '+(choices.pets.find(t=>t.id===r.teamId)?.name||'Team')+' · Entfernen',()=>save({teamRules:config().teamRules.filter((_,j)=>i!==j)}),teamList));}
   }
-  buyType.addEventListener('change',()=>{shopId.value={Seed:'seed',Egg:'egg',Tool:'tool',Decor:'decor'}[buyType.value];buyId.dataset.options='';refresh();});refresh();return {refresh,root};
+  buyType.addEventListener('change',()=>{shopId.value={Seed:'seed',Egg:'egg',Tool:'tool',Decor:'decor'}[buyType.value];buyId.dataset.options='';refresh();});refresh();return {refresh,root,alert,views:{automation:root,farming,protection,pets,journal:quests,teams,shop,diagnostics}};
 }
 
 
   let automation = null;
+/** Presentation only: reuses live controls; never sends a command or enables a module. */
+function mountCompactMenu(ui) {
+  'use strict';
+  const { document: doc, panel, body, header, headline, toggle, grip, controls,
+    startButton, stopButton, resetButton, settings, toggles, protectionToggles,
+    tools, fields, updateStatus, updateControls, copyButton, diagnosticStatus,
+    automationUI: auto, version, storage } = ui;
+  const pageKey = 'magic_garden_ui_section_v15';
+  const icons = {
+    overview: '<path d="M3 11 12 3l9 8M5 10v10h5v-6h4v6h5V10"/>',
+    fields: '<rect x="3" y="3" width="18" height="18" rx="3"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/>',
+    farming: '<path d="M12 21v-9M12 16C5 16 3 12 3 6c6 0 9 3 9 8M12 12c0-6 3-9 9-9 0 6-3 9-9 9"/>',
+    pets: '<ellipse cx="6" cy="7" rx="2" ry="3"/><ellipse cx="18" cy="7" rx="2" ry="3"/><ellipse cx="3" cy="13" rx="1.5" ry="2"/><ellipse cx="21" cy="13" rx="1.5" ry="2"/><path d="M7 15c2-6 8-6 10 0 5 7-1 7-5 5-4 2-10 2-5-5Z"/>',
+    shop: '<path d="M5 8h14l2 13H3L5 8ZM8 8V6a4 4 0 0 1 8 0v2"/>',
+    protection: '<path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6l8-3Z"/><path d="m8 12 3 3 5-6"/>',
+    journal: '<path d="M12 5C8 2 4 3 2 4v16c3-2 7-2 10 0 3-2 7-2 10 0V4c-2-1-6-2-10 1v15M6 8h2M16 8h2"/>',
+    teams: '<circle cx="9" cy="9" r="4"/><path d="M9 1v2M1 9h2M3 3l2 2M15 3l-2 2M18 6v2M6 18h12a4 4 0 0 0 0-8 6 6 0 0 0-11 2 3 3 0 0 0-1 6Z"/>',
+    automation: '<path d="M12 3v3M10 3h4"/><rect x="3" y="6" width="18" height="14" rx="4"/><path d="M7 12h1M16 12h1M8 16h8"/>',
+    settings: '<path d="M4 6h16M4 12h16M4 18h16"/><rect x="7" y="4" width="3" height="4" rx="1"/><rect x="15" y="10" width="3" height="4" rx="1"/><rect x="8" y="16" width="3" height="4" rx="1"/>',
+    updates: '<path d="M20 8a8 8 0 0 0-14-3L3 8M3 3v5h5M4 16a8 8 0 0 0 14 3l3-3M21 21v-5h-5"/>',
+    diagnostics: '<path d="M2 12h5l3-8 4 16 3-8h5"/>',
+    back: '<path d="m14 5-7 7 7 7M7 12h14"/>',
+    chevron: '<path d="m6 9 6 6 6-6"/>',
+    play: '<path d="m8 5 11 7-11 7Z"/>',
+    stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
+    grip: '<circle cx="8" cy="5" r="1"/><circle cx="16" cy="5" r="1"/><circle cx="8" cy="12" r="1"/><circle cx="16" cy="12" r="1"/><circle cx="8" cy="19" r="1"/><circle cx="16" cy="19" r="1"/>',
+  };
+  function svg(name) {
+    const el = doc.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    el.setAttribute('viewBox', '0 0 24 24'); el.setAttribute('fill', 'none');
+    el.setAttribute('stroke', 'currentColor'); el.setAttribute('stroke-width', '1.8');
+    el.setAttribute('stroke-linecap', 'round'); el.setAttribute('stroke-linejoin', 'round');
+    el.setAttribute('aria-hidden', 'true'); el.setAttribute('focusable', 'false');
+    // Fixed, local SVG paths only. No data from the game enters innerHTML.
+    el.innerHTML = icons[name] || icons.overview; return el;
+  }
+  function node(tag, cls, text) {
+    const el = doc.createElement(tag); if (cls) el.className = cls;
+    if (text !== undefined) el.textContent = text; return el;
+  }
+  function text(el, value) { const next = String(value ?? ''); if (el.textContent !== next) el.textContent = next; }
+  const style = node('style'); style.id = 'mg-compact-menu-style';
+  style.textContent = `
+#mg-autofarm-v13.mg-compact {--mg-bg:#29251f;--mg-surface:#363129;--mg-raised:#403930;--mg-line:#51483c;--mg-text:#f3ecdc;--mg-muted:#c1b49f;--mg-accent:#a6c494;--mg-focus:#e4c28a;display:flex;flex-direction:column;width:320px!important;max-width:calc(100vw - 16px)!important;overflow:hidden!important;padding:0!important;background:var(--mg-bg)!important;color:var(--mg-text)!important;border:2px solid var(--mg-line)!important;border-radius:20px!important;font:13px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif!important;box-shadow:0 12px 36px #0005!important;color-scheme:dark;isolation:isolate}
+#mg-autofarm-v13.mg-compact *,#mg-autofarm-v13.mg-compact *::before,#mg-autofarm-v13.mg-compact *::after {box-sizing:border-box}
+#mg-autofarm-v13.mg-compact [hidden] {display:none!important}
+#mg-autofarm-v13.mg-compact svg {width:22px;height:22px;display:block;flex:none;pointer-events:none}
+#mg-autofarm-v13 .mg-menu-header {position:relative;z-index:3;flex:0 0 auto;min-height:52px;padding:10px 12px!important;background:var(--mg-bg);gap:8px!important;border-bottom:1px solid var(--mg-line)}
+#mg-autofarm-v13.mg-collapsed .mg-menu-header {border-bottom:0}
+#mg-autofarm-v13 .mg-menu-grip {width:12px!important;margin:0!important;color:var(--mg-muted)!important;flex:none}
+#mg-autofarm-v13 .mg-menu-grip svg {width:12px;height:20px}
+#mg-autofarm-v13 .mg-menu-title {font:700 14px/1.2 system-ui,sans-serif!important;min-width:0;flex:1;display:flex;align-items:center;gap:7px;white-space:nowrap}
+#mg-autofarm-v13 .mg-dot {width:7px;height:7px;border-radius:50%;background:#a79c8c;display:inline-block;flex:none}
+#mg-autofarm-v13[data-running="true"] .mg-dot {background:#a4ca91;box-shadow:0 0 0 3px #a4ca9110}
+#mg-autofarm-v13 .mg-version {font:600 10px/1.3 ui-monospace,monospace;color:var(--mg-accent);padding:4px 7px;border-radius:10px;background:#354032;flex:none;white-space:nowrap}
+#mg-autofarm-v13.mg-compact button,#mg-autofarm-v13.mg-compact a {font:600 12px/1.3 system-ui,sans-serif!important;color:var(--mg-text)!important;background:var(--mg-surface)!important;border:1px solid var(--mg-line)!important;border-radius:10px!important;min-width:0;padding:8px!important;cursor:pointer;box-shadow:0 2px 0 #19161155;transition:background .12s ease,border-color .12s ease;text-decoration:none}
+#mg-autofarm-v13.mg-compact button:hover,#mg-autofarm-v13.mg-compact a:hover {background:var(--mg-raised)!important;border-color:#8a795f!important}
+#mg-autofarm-v13.mg-compact button:disabled {cursor:default;opacity:.45}
+#mg-autofarm-v13.mg-compact :is(button,a,input,select,summary):focus-visible {outline:2px solid var(--mg-focus)!important;outline-offset:2px}
+#mg-autofarm-v13.mg-compact .mg-menu-toggle {flex:none!important;width:28px;height:28px;padding:4px!important;border:0!important;box-shadow:none;margin:0!important}
+#mg-autofarm-v13 .mg-menu-toggle svg {width:18px;height:18px;transform:rotate(180deg)}
+#mg-autofarm-v13.mg-collapsed .mg-menu-toggle svg {transform:none}
+#mg-autofarm-v13 .mg-menu-body {display:flex;flex-direction:column;flex:0 1 auto;min-height:0;overflow:hidden}
+#mg-autofarm-v13 .mg-menu-controls {flex:0 0 auto;display:flex;align-items:center;gap:7px!important;padding:10px 12px 8px;margin:0!important}
+#mg-autofarm-v13 .mg-menu-controls button {display:flex;justify-content:center;align-items:center;gap:5px;padding:7px!important}
+#mg-autofarm-v13 .mg-menu-controls svg {width:14px;height:14px}
+#mg-autofarm-v13 .mg-menu-controls .mg-start {color:#d9ecd1!important;background:#3b4b34!important;border-color:#536848!important}
+#mg-autofarm-v13 .mg-hotkey {flex:none;color:var(--mg-muted);font:10px ui-monospace,monospace;padding-left:3px}
+#mg-autofarm-v13 .mg-menu-location {display:flex;align-items:center;gap:8px;flex:0 0 auto;padding:0 12px 8px}
+#mg-autofarm-v13.mg-compact .mg-back {flex:none;width:28px;height:28px;padding:4px!important;background:transparent!important;box-shadow:none}
+#mg-autofarm-v13 .mg-back svg {width:18px;height:18px}
+#mg-autofarm-v13 .mg-location-title {font-size:13px;font-weight:650;margin:0;outline:none}
+#mg-autofarm-v13 .mg-menu-scroll {overflow-y:auto;overflow-x:hidden;min-height:0;flex:0 1 auto;overscroll-behavior-y:contain;padding:2px 12px 14px;scrollbar-width:thin;scrollbar-color:#746651 transparent;scroll-padding:10px}
+#mg-autofarm-v13 .mg-menu-scroll::-webkit-scrollbar {width:5px}
+#mg-autofarm-v13 .mg-menu-scroll::-webkit-scrollbar-thumb {background:#746651;border-radius:6px}
+#mg-autofarm-v13 .mg-home-metrics {display:grid;grid-template-columns:1fr 1.2fr 1fr;gap:8px;margin:1px 0 12px}
+#mg-autofarm-v13 .mg-metric-label {font-size:10px;color:var(--mg-muted);display:block;margin-bottom:2px}
+#mg-autofarm-v13 .mg-metric-value {font:650 13px/1.3 ui-monospace,monospace;overflow-wrap:anywhere}
+#mg-autofarm-v13 .mg-menu-nav {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px}
+#mg-autofarm-v13.mg-compact .mg-shortcut {min-height:65px;margin:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;border-radius:15px!important;border-color:transparent!important;padding:9px 3px!important;color:#e1d1b4!important;box-shadow:0 3px 0 #504638;position:relative}
+#mg-autofarm-v13 .mg-shortcut span {font-size:10px;font-weight:550;line-height:1.2;letter-spacing:.01em}
+#mg-autofarm-v13 .mg-shortcut[data-new="true"]::after {content:"";position:absolute;right:10px;top:8px;width:6px;height:6px;border-radius:50%;background:var(--mg-accent)}
+#mg-autofarm-v13 .mg-home-state {color:var(--mg-muted);font-size:10px;margin:12px 0 0;white-space:nowrap;text-overflow:ellipsis;overflow:hidden}
+#mg-autofarm-v13 .mg-menu-view {min-width:0}
+#mg-autofarm-v13.mg-compact .mg-menu-view > div,#mg-autofarm-v13.mg-compact .mg-menu-view > details {border:0!important;padding:0!important;margin-top:0!important}
+#mg-autofarm-v13 .mg-auto-section > summary,#mg-autofarm-v13 .mg-auto-intro > h3 {display:none}
+#mg-autofarm-v13.mg-compact label {font-size:12px!important;line-height:1.5!important;gap:10px!important;margin:11px 0!important;white-space:normal}
+#mg-autofarm-v13.mg-compact label > span {min-width:0;flex:1;overflow-wrap:break-word;color:var(--mg-text)}
+#mg-autofarm-v13.mg-compact input:not([type="checkbox"]),#mg-autofarm-v13.mg-compact select {width:112px!important;max-width:44%!important;min-width:0;flex:0 0 auto;min-height:31px;border:1px solid #695c49!important;border-radius:8px!important;padding:5px 7px!important;background:#211e19!important;color:var(--mg-text)!important;font:12px/1.3 system-ui,sans-serif!important}
+#mg-autofarm-v13.mg-compact input[type="checkbox"] {accent-color:#a6c494;width:15px;height:15px;flex:none;cursor:pointer}
+#mg-autofarm-v13.mg-compact p,#mg-autofarm-v13.mg-compact small {font:11px/1.6 system-ui,sans-serif!important;color:var(--mg-muted)!important;overflow-wrap:anywhere}
+#mg-autofarm-v13.mg-compact small {display:block;margin:10px 0}
+#mg-autofarm-v13.mg-compact pre {font:11px/1.6 ui-monospace,monospace!important;color:var(--mg-muted);overflow-wrap:anywhere;white-space:pre-wrap}
+#mg-autofarm-v13 .mg-feedback {margin:0!important;padding:0 12px 7px;flex:none;font-size:10px!important;color:var(--mg-accent)!important;max-height:54px;overflow:auto}
+#mg-autofarm-v13 .mg-feedback:empty {display:none}
+#mg-autofarm-v13 .mg-stat-row {display:flex;justify-content:space-between;gap:12px;border-bottom:1px solid #51483c77;padding:8px 0;font-size:12px}
+#mg-autofarm-v13 .mg-stat-row span {color:var(--mg-muted)}
+#mg-autofarm-v13 .mg-stat-row strong {font-weight:550;text-align:right;font-variant-numeric:tabular-nums;overflow-wrap:anywhere;max-width:65%}
+#mg-autofarm-v13.mg-compact [data-mg-field] {padding:0!important;aspect-ratio:1;border-radius:5px!important;font:9px system-ui,sans-serif!important;background:#332e27!important;color:#cebea6!important;box-shadow:none;touch-action:none}
+#mg-autofarm-v13.mg-compact [data-mg-field][aria-pressed="true"] {background:#506046!important;color:#edf4e7!important;border-color:#819271!important}
+#mg-autofarm-v13.mg-compact [data-mg-field]:hover {border-color:#b5ab88!important}
+#mg-autofarm-v13 .mg-version-note {color:var(--mg-muted);font-size:11px;margin:8px 0}
+#mg-autofarm-v13 #mg13-status {font-size:12px;margin:4px 0 12px!important}
+#mg-autofarm-v13.mg-compact #mg15-automation {border:0!important;padding:0!important;margin:0!important}
+@media (max-width:360px) {#mg-autofarm-v13 .mg-menu-nav {gap:7px} #mg-autofarm-v13 .mg-menu-title {font-size:12px!important} #mg-autofarm-v13 .mg-version {font-size:9px} }
+@media (prefers-reduced-motion:reduce) {#mg-autofarm-v13.mg-compact * {transition:none!important}}
+`;
+  doc.head.appendChild(style);
+  panel.classList.add('mg-compact'); panel.setAttribute('role', 'region');
+  panel.setAttribute('aria-label', 'Magic Garden AutoFarm');
+  header.classList.add('mg-menu-header'); headline.classList.add('mg-menu-title');
+  grip.classList.add('mg-menu-grip'); grip.replaceChildren(svg('grip'));
+  const dot = node('span', 'mg-dot'); const label = node('span', '', 'AutoFarm');
+  headline.replaceChildren(dot, label);
+  const badge = node('span', 'mg-version', 'v' + version); header.insertBefore(badge, toggle);
+  toggle.classList.add('mg-menu-toggle'); toggle.replaceChildren(svg('chevron'));
+  toggle.setAttribute('aria-controls', 'mg-menu-body');
+  body.id = 'mg-menu-body'; body.classList.add('mg-menu-body');
+  controls.classList.add('mg-menu-controls');
+  startButton.classList.add('mg-start'); stopButton.classList.add('mg-stop');
+  startButton.replaceChildren(svg('play'), doc.createTextNode('Start'));
+  stopButton.replaceChildren(svg('stop'), doc.createTextNode('Stop'));
+  startButton.setAttribute('aria-label', 'AutoFarm starten'); stopButton.setAttribute('aria-label', 'AutoFarm stoppen');
+  controls.appendChild(node('span', 'mg-hotkey', 'F8'));
+  const breadcrumb = node('div', 'mg-menu-location');
+  const back = node('button', 'mg-back'); back.type = 'button'; back.appendChild(svg('back'));
+  back.title = 'Zur Übersicht'; back.setAttribute('aria-label', 'Zur Übersicht');
+  const pageTitle = node('h2', 'mg-location-title', ''); pageTitle.tabIndex = -1;
+  breadcrumb.append(back, pageTitle);
+  const scroll = node('div', 'mg-menu-scroll'); scroll.id = 'mg-menu-scroll';
+  const home = node('section', 'mg-menu-view'); home.dataset.view = 'home'; home.setAttribute('aria-label', 'Startübersicht');
+  const metricStrip = node('div', 'mg-home-metrics'); const metricValues = {};
+  for (const [key, title] of [['harvested', 'Geerntet'], ['coins', 'Coins'], ['runtime', 'Laufzeit']]) {
+    const card = node('div'); const val = node('strong', 'mg-metric-value', '0');
+    card.append(node('span', 'mg-metric-label', title), val); metricValues[key] = val; metricStrip.appendChild(card);
+  }
+  const nav = node('nav', 'mg-menu-nav'); nav.setAttribute('aria-label', 'AutoFarm Bereiche');
+  const homeState = node('p', 'mg-home-state', 'Warte auf Spiel');
+  home.append(metricStrip, nav, homeState);
+  const overview = node('div');
+  const statDefinitions = [['runtime', 'Laufzeit'], ['harvested', 'Geerntet'], ['coins', 'Verdiente Coins'], ['sold', 'Verkäufe'],
+    ['fields', 'Gewählte Felder'], ['produce', 'Verkaufbare Items'], ['delay', 'Erntepause'], ['errors', 'Fehler'], ['rejected', 'Ablehnungen'], ['protected', 'Schutz-Skips']];
+  const statValues = {};
+  for (const [key, title] of statDefinitions) {
+    const row = node('div', 'mg-stat-row'); const val = node('strong', '', '0');
+    row.append(node('span', '', title), val); statValues[key] = val; overview.appendChild(row);
+  }
+  const legacyStatus = panel.querySelector('#mg13-status'); const legacyStats = panel.querySelector('#mg13-stats');
+  if (legacyStatus) overview.prepend(legacyStatus);
+  resetButton.textContent = 'Session zurücksetzen'; resetButton.style.marginTop = '12px'; overview.appendChild(resetButton);
+  const diagnostics = auto.views.diagnostics; if (legacyStats) {
+    const details = node('details'); details.append(node('summary', '', 'Verbindung & vollständiger Status'), legacyStats); diagnostics.appendChild(details);
+  }
+  diagnostics.append(copyButton, diagnosticStatus);
+  // All original controls are MOVED, not copied, so their handlers and focus state survive.
+  auto.views.protection.prepend(protectionToggles);
+  const settingsView = node('div'); settingsView.append(settings, toggles);
+  const updates = node('div'); updates.append(node('p', 'mg-version-note', 'Installiert: v' + version), updateStatus, updateControls);
+  const descriptors = [
+    ['overview', 'Übersicht', overview], ['fields', 'Felder', fields], ['farming', 'Pflanzen', auto.views.farming],
+    ['pets', 'Pets & Futter', auto.views.pets], ['shop', 'Einkauf', auto.views.shop], ['protection', 'Schutz', auto.views.protection],
+    ['journal', 'Journal', auto.views.journal], ['teams', 'Wetter', auto.views.teams], ['automation', 'Autopilot', auto.views.automation],
+    ['settings', 'Einstellungen', settingsView], ['updates', 'Updates', updates], ['diagnostics', 'Diagnose', diagnostics],
+  ];
+  const views = new Map([['home', home]]); const shortcuts = new Map();
+  scroll.appendChild(home);
+  for (const [key, title, content] of descriptors) {
+    const view = node('section', 'mg-menu-view'); view.dataset.view = key; view.id = 'mg-view-' + key;
+    view.setAttribute('aria-label', title); view.hidden = true;
+    if (content.tagName === 'DETAILS') { content.open = true; content.classList.add('mg-auto-section'); }
+    view.appendChild(content); scroll.appendChild(view); views.set(key, view);
+    const button = node('button', 'mg-shortcut'); button.type = 'button'; button.dataset.section = key;
+    button.title = title; button.setAttribute('aria-label', title); button.setAttribute('aria-controls', view.id);
+    button.append(svg(key), node('span', '', title));
+    button.addEventListener('click', () => show(key, true)); nav.appendChild(button); shortcuts.set(key, button);
+  }
+  // Replace the old single long sheet by an anchored title, anchored actions, and one scroller.
+  // The title is deliberately NOT a descendant of the scrolling container.
+  body.replaceChildren(controls, breadcrumb, scroll, auto.alert);
+  auto.alert.className = 'mg-feedback'; auto.alert.setAttribute('role', 'status'); auto.alert.setAttribute('aria-live', 'polite');
+  tools.remove(); // Empty legacy wrapper: update and diagnostic controls are already relocated.
+  let current = 'home'; const positions = new Map();
+  function show(key, moveFocus = false) {
+    if (!views.has(key)) key = 'home';
+    const previous = current; positions.set(current, scroll.scrollTop); current = key;
+    for (const [name, view] of views) view.hidden = name !== key;
+    breadcrumb.hidden = key === 'home'; text(pageTitle, descriptors.find(d => d[0] === key)?.[1] || 'Übersicht');
+    scroll.scrollTop = positions.get(key) || 0;
+    try { storage.setItem(pageKey, key); } catch { /* UI still works without storage. */ }
+    if (moveFocus) {
+      if (key === 'home') shortcuts.get(previous)?.focus({preventScroll: true});
+      else back.focus({preventScroll: true});
+    }
+  }
+  back.addEventListener('click', () => show('home', true));
+  body.addEventListener('keydown', event => {
+    if (event.key !== 'Escape' || event.target.closest('input,select,textarea,[contenteditable="true"]') || current === 'home') return;
+    event.stopPropagation(); show('home', true);
+  });
+  nav.addEventListener('keydown', event => {
+    const deltas = {ArrowRight: 1, ArrowLeft: -1, ArrowDown: 3, ArrowUp: -3};
+    if (!(event.key in deltas)) return;
+    const items = [...shortcuts.values()]; const index = items.indexOf(doc.activeElement); if (index < 0) return;
+    event.preventDefault(); items[(index + deltas[event.key] + items.length) % items.length].focus();
+  });
+  function setCollapsed(value) {
+    panel.classList.toggle('mg-collapsed', value); toggle.setAttribute('aria-expanded', String(!value));
+    const title = value ? 'Menü ausklappen' : 'Menü einklappen'; toggle.setAttribute('aria-label', title); toggle.title = title;
+  }
+  function refresh(data) {
+    panel.dataset.running = String(data.running);
+    const stateLabel = data.running ? 'Aktiv' : data.busy ? 'Stoppt …' : 'Gestoppt';
+    dot.title = stateLabel; headline.setAttribute('aria-label', 'AutoFarm – ' + stateLabel); headline.title = stateLabel;
+    text(label, data.running ? 'AutoFarm · Aktiv' : data.busy ? 'AutoFarm · Stoppt' : 'AutoFarm');
+    for (const [key, el] of Object.entries(metricValues)) text(el, key === 'coins' ? data.coinsCompact : data[key]);
+    metricValues.coins.title = data.coins;
+    for (const [key, el] of Object.entries(statValues)) text(el, data[key]);
+    text(homeState, data.connection); startButton.disabled = data.running || data.busy; stopButton.disabled = !data.running;
+    shortcuts.get('updates').dataset.new = String(!!data.update);
+    shortcuts.get('updates').title = data.update ? 'Update verfügbar: v' + data.update : 'Updates';
+  }
+  let saved = 'home'; try { saved = storage.getItem(pageKey) || 'home'; } catch { /* use home */ }
+  show(saved); setCollapsed(ui.collapsed);
+  return {refresh, setCollapsed, show, scroll, header, views};
+}
+
+
   let automationUI = null;
+  let compactMenu = null;
 
   // V14: offizielle Aktualisierung der bisherigen V13-AutoFarm ueber denselben
   // Tampermonkey-Namen, Namespace und GitHub-URL (keine zweite Installation).
@@ -291,7 +519,7 @@ function mountAutomationUI(parent, engine, document) {
   }
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-  const VERSION = "15.0.0";
+  const VERSION = "15.1.0";
   const UPDATE_URL = "https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js";
   const NUMBER_FIELDS = Object.freeze({
     sellThreshold: { min: 5, max: 200, step: 1 },
@@ -1344,14 +1572,14 @@ function mountAutomationUI(parent, engine, document) {
     const maxX = Math.max(8, window.innerWidth - bounds.width - 8);
     // Die Titelleiste soll sichtbar bleiben. Ist das Panel tiefer platziert,
     // wird der scrollbare Inhalt verkleinert statt die Bewegung zu blockieren.
-    const maxY = Math.max(8, window.innerHeight - 84);
+    const maxY = Math.max(8, window.innerHeight - (collapsed ? 68 : 220));
     const x = clamp(Math.round(left), 8, maxX);
     const y = clamp(Math.round(top), 8, maxY);
     panel.style.left = `${x}px`;
     panel.style.top = `${y}px`;
     panel.style.right = "auto";
     panel.style.maxHeight = `${Math.min(Math.floor(window.innerHeight * 0.85),
-      Math.max(76, window.innerHeight - y - 8))}px`;
+      Math.max(52, window.innerHeight - y - 8))}px`;
     if (persist) storeJSON(localStorage, KEYS.panelPosition, { left: x, top: y });
   }
 
@@ -1430,7 +1658,7 @@ function mountAutomationUI(parent, engine, document) {
     const status = panel.querySelector("#mg13-status");
     const stats = panel.querySelector("#mg13-stats");
     if (status) status.textContent = state.running ? "🟢 Aktiv" : state.busy ? "🟡 Stoppt …" : "🔴 Gestoppt";
-    if (headline) headline.textContent = state.running ? "🌱 AutoFarm V15 · Aktiv" : "🌱 Magic Garden V15";
+    if (!compactMenu && headline) headline.textContent = state.running ? "🌱 AutoFarm V15 · Aktiv" : "🌱 Magic Garden V15";
     if (stats) stats.textContent =
       `Felder: ${selectedSlots().size} / 200\n` +
       `Geerntet: ${state.harvested}\n` +
@@ -1454,12 +1682,23 @@ function mountAutomationUI(parent, engine, document) {
     if (fieldCount) fieldCount.textContent = `Ausgewählt: ${selectedSlots().size} / 200`;
     if (updateStatus) updateStatus.textContent = updateInfo.status;
     if (updateLink) updateLink.style.display = updateInfo.newer ? "inline-block" : "none";
+    compactMenu?.refresh({
+      running: state.running, busy: state.busy, connection: state.connection,
+      harvested: state.harvested.toLocaleString("de-DE"),
+      coins: state.coins.toLocaleString("de-DE"),
+      coinsCompact: new Intl.NumberFormat("de-DE", {notation:"compact", maximumFractionDigits:1}).format(state.coins),
+      sold: state.sold, runtime: formatTime(runtimeMs()), fields: selectedSlots().size + " / 200",
+      produce: getProduce().length, delay: (prefs.adaptive ? state.currentDelay : cfg.adaptive.initialMs) + " ms",
+      errors: state.errors, rejected: state.rejectedHarvests, protected: state.protectedSkips,
+      update: updateInfo.newer
+    });
   }
   function repaintFields() {
     for (const { el, side, i } of fieldButtons) {
       const active = selection[side].has(i);
       el.style.background = active ? "#237c49" : "#1b2a23";
       el.style.borderColor = active ? "#65d88c" : "#456052";
+      el.setAttribute("aria-pressed", String(active));
     }
     updatePanel();
   }
@@ -1484,6 +1723,7 @@ function mountAutomationUI(parent, engine, document) {
       el.dataset.side = side;
       el.dataset.index = String(i);
       el.title = `${side === "left" ? "Links" : "Rechts"}: Reihe ${Math.floor(i / 10) + 1}, Spalte ${i % 10 + 1}`;
+      el.setAttribute("aria-label", el.title);
       el.style.cssText = "aspect-ratio:1;min-width:0;padding:0;border:1px solid;border-radius:4px;color:#fff;font-size:10px;cursor:pointer;touch-action:none;user-select:none";
       fieldButtons.push({ el, side, i });
       grid.appendChild(el);
@@ -1519,6 +1759,7 @@ function mountAutomationUI(parent, engine, document) {
       else chosen.delete(hit.index);
       hit.button.style.background = stroke.select ? "#237c49" : "#1b2a23";
       hit.button.style.borderColor = stroke.select ? "#65d88c" : "#456052";
+      hit.button.setAttribute("aria-pressed", String(stroke.select));
       stroke.changed = true;
       if (fieldCount) {
         fieldCount.textContent =
@@ -1606,7 +1847,8 @@ function mountAutomationUI(parent, engine, document) {
       collapsed = !collapsed;
       storeValue(localStorage, KEYS.collapsed, String(collapsed));
       body.style.display = collapsed ? "none" : "";
-      toggle.textContent = collapsed ? "+" : "−";
+      if (compactMenu) compactMenu.setCollapsed(collapsed);
+      else toggle.textContent = collapsed ? "+" : "−";
       // Nach Ein-/Ausklappen pruefen, dass das Panel im Bildschirm bleibt.
       if (panel.style.left) {
         const rect = panel.getBoundingClientRect();
@@ -1753,10 +1995,20 @@ function mountAutomationUI(parent, engine, document) {
     fields.appendChild(actions);
     body.appendChild(fields);
     panel.appendChild(body);
+    compactMenu = mountCompactMenu({
+      document, panel, body, header, headline, toggle, grip, controls,
+      startButton: startBtn, stopButton: stopBtn, resetButton,
+      settings: settingsPanel, toggles, protectionToggles: standaloneToggles,
+      tools, fields, updateStatus, updateControls, copyButton, diagnosticStatus,
+      automationUI, version: VERSION, storage: localStorage, collapsed
+    });
     document.body.appendChild(panel);
     const savedPosition = readJSON(localStorage, KEYS.panelPosition, null);
     if (Number.isFinite(savedPosition?.left) && Number.isFinite(savedPosition?.top)) {
       positionPanel(savedPosition.left, savedPosition.top, false);
+    } else {
+      const initial = panel.getBoundingClientRect();
+      positionPanel(initial.left, initial.top, false);
     }
     window.addEventListener("resize", () => {
       if (!panel) return;
@@ -1838,5 +2090,5 @@ function mountAutomationUI(parent, engine, document) {
   if (readValue(sessionStorage, KEYS.resume) === "1") {
     start({ auto: true });
   }
-  console.log("✅ Magic Garden AutoFarm V15.0.0 geladen (Automationszentrale, ohne Fremdskripte).");
+  console.log("✅ Magic Garden AutoFarm V15.1.0 geladen (Automationszentrale, ohne Fremdskripte).");
 })();
