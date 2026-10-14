@@ -15,11 +15,10 @@ jobs:
           persist-credentials: false
       - name: Capture public catalog when absent
         run: |
-          if [ -f scripts/refresh-data.cjs ] && [ ! -f src/catalog-data.json ]; then node scripts/refresh-data.cjs; fi
-      - name: Inspect public protocol only while the V15 audit is open
-        if: github.ref == 'refs/heads/feature/v15-autopilot'
-        continue-on-error: true
-        run: node scripts/probe-public-protocol.cjs > protocol-audit.log
+          if [ -f scripts/refresh-data.cjs ] && [ ! -f src/catalog-slim.json ]; then node scripts/refresh-data.cjs; fi
+      - name: One-time detailed public protocol audit
+        if: github.event.head_commit.message == 'research: run detailed protocol audit'
+        run: node scripts/probe-detail.cjs
       - name: Build if modular sources are present
         run: |
           if [ -f scripts/build.cjs ]; then node scripts/build.cjs; fi
@@ -44,5 +43,4 @@ jobs:
             scripts/
             tests/
             research/
-            protocol-audit.log
             README.md
