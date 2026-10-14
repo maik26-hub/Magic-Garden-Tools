@@ -4,10 +4,10 @@ const root=path.resolve(__dirname,'..');
 let src=fs.readFileSync(path.join(root,'src/core-v14.user.js'),'utf8');
 function replace(a,b,name){const parts=src.split(a);if(parts.length!==2)throw Error(`${name}: expected one anchor, got ${parts.length-1}`);src=parts[0]+b+parts[1];}
 function stripExports(file){return fs.readFileSync(path.join(root,'src',file),'utf8').replace(/^if \(typeof module[^\n]*$/m,'');}
-replace('// @version      14.0.3','// @version      15.0.0','metadata version');
-replace('const VERSION = "14.0.3"','const VERSION = "15.0.0"','runtime version');
+replace('// @version      14.0.3','// @version      15.1.0','metadata version');
+replace('const VERSION = "14.0.3"','const VERSION = "15.1.0"','runtime version');
 replace('// @description  V14.0.3: standalone auto-farm, direct V13 update, AFK watchdog and safe reconnect/reload recovery','// @description  V15: modular automation for plants, pets, eggs, shops, storage, journal and daily rewards','description');
-replace('  "use strict";', '  "use strict";\n\n'+stripExports('automation-core.js')+'\n'+stripExports('automation-ui.js')+'\n  let automation = null;\n  let automationUI = null;','inline modules');
+replace('  "use strict";', '  "use strict";\n\n'+stripExports('automation-core.js')+'\n'+stripExports('choice-menu.js')+'\n'+stripExports('compact-panel.js')+'\n'+stripExports('automation-ui.js')+'\n  let automation = null;\n  let automationUI = null;\n  let compactPanel = null;','inline modules');
 replace('    sequence: -1, frontier: -1, lastSnapshotAt: 0, observedSockets: 0',`    sequence: -1, frontier: -1, lastSnapshotAt: 0, observedSockets: 0,
     own: null, game: null, actor: null, heldId: '', generation: 0,
     welcomed: false, cancelPending: null, serverOffset: 0`,'bridge fields');
@@ -141,7 +141,27 @@ replace('  // ===== Konsole =====',`  // ===== Native Kataloge: ausschließlich 
   // ===== Konsole =====`,'init engine');
 replace('    state, cfg, prefs, start, stop, resetTimer, resetSession, selectedSlots, getDiagnostics, checkForUpdate, setNumberPreference,','    state, cfg, prefs, start, stop, resetTimer, resetSession, selectedSlots, getDiagnostics, checkForUpdate, setNumberPreference, automation,','public API');
 replace('      runtimeSeconds: Math.floor(runtimeMs() / 1000)','      runtimeSeconds: Math.floor(runtimeMs() / 1000),\n      automation: automation?.status() || null','diag');
-replace('console.log("✅ Magic Garden AutoFarm V14.0.3 geladen (keine QPM-/Companion-Abhaengigkeit).");','console.log("✅ Magic Garden AutoFarm V15.0.0 geladen (Automationszentrale, ohne Fremdskripte).");','boot');
+replace('console.log("✅ Magic Garden AutoFarm V14.0.3 geladen (keine QPM-/Companion-Abhaengigkeit).");','console.log("✅ Magic Garden AutoFarm V15.1.0 geladen (Automationszentrale, ohne Fremdskripte).");','boot');
+// V15.1 UI-only changes: preserve listeners, state keys and existing automation behavior.
+replace('    panel.appendChild(body);', `    compactPanel = mountCompactPanel({document, panel, header, body, headline, toggle,
+      controls, resetButton, toggles, settingsPanel, tools, fields,
+      automationRoot: automationUI.root, version: VERSION, storage: localStorage, collapsed});
+    panel.appendChild(body);`, 'compact frame');
+replace('    if (headline) headline.textContent = state.running ? "🌱 AutoFarm V15 · Aktiv" : "🌱 Magic Garden V15";',
+  '    if (headline) headline.textContent = "AutoFarm";', 'header label');
+replace('state.running ? "🟢 Aktiv" : state.busy ? "🟡 Stoppt …" : "🔴 Gestoppt"',
+  'state.running ? "Aktiv" : state.busy ? "Stoppt …" : "Gestoppt"', 'status label');
+replace('    if (fieldCount) fieldCount.textContent = `Ausgewählt: ${selectedSlots().size} / 200`;',
+`    compactPanel?.refresh({running:state.running,busy:state.busy,
+      harvested:state.harvested.toLocaleString("de-DE"),coins:state.coins.toLocaleString("de-DE"),
+      sold:state.sold.toLocaleString("de-DE"),fields:selectedSlots().size+" / 200",
+      runtime:formatTime(runtimeMs()),delay:(prefs.adaptive?state.currentDelay:cfg.adaptive.initialMs)+" ms"});
+    if (fieldCount) fieldCount.textContent = \`Ausgewählt: \${selectedSlots().size} / 200\`;`, 'compact statistics');
+replace('      const active = selection[side].has(i);',`      const active = selection[side].has(i);
+      el.dataset.selected = String(active); el.setAttribute("aria-pressed", String(active));`, 'field state');
+replace('      stroke.changed = true;',`      hit.button.dataset.selected = String(stroke.select);
+      hit.button.setAttribute("aria-pressed", String(stroke.select));
+      stroke.changed = true;`, 'paint state');
 new vm.Script(src,{filename:'MagicGardenAutoFarm.user.js'});
 fs.writeFileSync(path.join(root,'MagicGardenAutoFarm.user.js'),src);
-console.log('Built V15.0.0:',Buffer.byteLength(src),'bytes');
+console.log('Built V15.1.0:',Buffer.byteLength(src),'bytes');
