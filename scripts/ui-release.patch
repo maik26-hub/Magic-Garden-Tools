@@ -1,0 +1,120 @@
+--- a/scripts/build.cjs
++++ b/scripts/build.cjs
+@@ -7,2 +7,2 @@
+-replace('// @version      14.0.3','// @version      15.0.0','metadata version');
+-replace('const VERSION = "14.0.3"','const VERSION = "15.0.0"','runtime version');
++replace('// @version      14.0.3','// @version      15.1.0','metadata version');
++replace('const VERSION = "14.0.3"','const VERSION = "15.1.0"','runtime version');
+@@ -10 +10 @@
+-replace('  "use strict";', '  "use strict";\n\n'+stripExports('automation-core.js')+'\n'+stripExports('automation-ui.js')+'\n  let automation = null;\n  let automationUI = null;','inline modules');
++replace('  "use strict";', '  "use strict";\n\n'+stripExports('automation-core.js')+'\n'+stripExports('choice-menu.js')+'\n'+stripExports('compact-panel.js')+'\n'+stripExports('automation-ui.js')+'\n  let automation = null;\n  let automationUI = null;\n  let compactPanel = null;','inline modules');
+@@ -144 +144,21 @@
+-replace('console.log("✅ Magic Garden AutoFarm V14.0.3 geladen (keine QPM-/Companion-Abhaengigkeit).");','console.log("✅ Magic Garden AutoFarm V15.0.0 geladen (Automationszentrale, ohne Fremdskripte).");','boot');
++replace('console.log("✅ Magic Garden AutoFarm V14.0.3 geladen (keine QPM-/Companion-Abhaengigkeit).");','console.log("✅ Magic Garden AutoFarm V15.1.0 geladen (Automationszentrale, ohne Fremdskripte).");','boot');
++// V15.1 UI-only changes: preserve listeners, state keys and existing automation behavior.
++replace('    panel.appendChild(body);', `    compactPanel = mountCompactPanel({document, panel, header, body, headline, toggle,
++      controls, resetButton, toggles, settingsPanel, tools, fields,
++      automationRoot: automationUI.root, version: VERSION, storage: localStorage, collapsed});
++    panel.appendChild(body);`, 'compact frame');
++replace('    if (headline) headline.textContent = state.running ? "🌱 AutoFarm V15 · Aktiv" : "🌱 Magic Garden V15";',
++  '    if (headline) headline.textContent = "AutoFarm";', 'header label');
++replace('state.running ? "🟢 Aktiv" : state.busy ? "🟡 Stoppt …" : "🔴 Gestoppt"',
++  'state.running ? "Aktiv" : state.busy ? "Stoppt …" : "Gestoppt"', 'status label');
++replace('    if (fieldCount) fieldCount.textContent = `Ausgewählt: ${selectedSlots().size} / 200`;',
++`    compactPanel?.refresh({running:state.running,busy:state.busy,
++      harvested:state.harvested.toLocaleString("de-DE"),coins:state.coins.toLocaleString("de-DE"),
++      sold:state.sold.toLocaleString("de-DE"),fields:selectedSlots().size+" / 200",
++      runtime:formatTime(runtimeMs()),delay:(prefs.adaptive?state.currentDelay:cfg.adaptive.initialMs)+" ms"});
++    if (fieldCount) fieldCount.textContent = \`Ausgewählt: \${selectedSlots().size} / 200\`;`, 'compact statistics');
++replace('      const active = selection[side].has(i);',`      const active = selection[side].has(i);
++      el.dataset.selected = String(active); el.setAttribute("aria-pressed", String(active));`, 'field state');
++replace('      stroke.changed = true;',`      hit.button.dataset.selected = String(stroke.select);
++      hit.button.setAttribute("aria-pressed", String(stroke.select));
++      stroke.changed = true;`, 'paint state');
+@@ -147 +167 @@
+-console.log('Built V15.0.0:',Buffer.byteLength(src),'bytes');
++console.log('Built V15.1.0:',Buffer.byteLength(src),'bytes');
+--- a/src/automation-ui.js
++++ b/src/automation-ui.js
+@@ -9 +9 @@
+-  const inputs=new Map(),selectors=[],status=document.createElement('pre');
++  const inputs=new Map(),selectors=[],pickers=[],status=document.createElement('pre');
+@@ -14 +14 @@
+-  function row(label,element,where=root){element.setAttribute('aria-label',label);const r=document.createElement('label');r.style.cssText='display:flex;justify-content:space-between;align-items:center;gap:8px;margin:7px 0;font-size:12px';const text=document.createElement('span');text.textContent=label;r.append(text,element);where.appendChild(r);return r;}
++  function row(label,element,where=root){element.setAttribute('aria-label',label);const r=document.createElement(element.tagName==='DETAILS'?'div':'label');r.className='mg-option-row';r.style.cssText='display:flex;justify-content:space-between;align-items:center;gap:8px;margin:7px 0;font-size:12px';const text=document.createElement('span');text.textContent=label;r.append(text,element);where.appendChild(r);return r;}
+@@ -17 +17,9 @@
+-  function list(label,key,where=root){const input=document.createElement('input');input.value=config()[key].join(', ');input.placeholder='IDs, mit Komma getrennt';input.style.cssText=style;input.addEventListener('change',()=>save({[key]:input.value.split(',').map(x=>x.trim()).filter(Boolean)}));inputs.set(key,input);row(label,input,where);}
++  function list(label,key,kind,where=root){
++    const picker=createChoiceMenu(document,{
++      label,placeholder:{plants:'Pflanzen wählen',mutations:'Mutationen wählen',weather:'Wetter wählen'}[kind],
++      read:()=>config()[key],onChange:next=>{engine.configure({[key]:next});alert.textContent='Gespeichert';},
++      choices:()=>automationChoiceOptions(engine,kind)
++    });
++    picker.root.dataset.preference=key;
++    pickers.push(picker);row(label,picker.root,where);
++  }
+@@ -32,2 +40,2 @@
+-  list('Diese Pflanzenarten behalten','keepSpecies',protection);number('Ernten ab Größe (0 = alle)','minHarvestSize',0,100,protection);
+-  number('Ernten ab Basiswert (0 = alle)','minHarvestValue',0,1e12,protection);list('Nur diese Mutationen ernten','wantedMutations',protection);list('Bei diesem Wetter Ernte pausieren','pauseWeather',protection);
++  list('Diese Pflanzenarten behalten','keepSpecies','plants',protection);number('Ernten ab Größe (0 = alle)','minHarvestSize',0,100,protection);
++  number('Ernten ab Basiswert (0 = alle)','minHarvestValue',0,1e12,protection);list('Nur diese Mutationen ernten','wantedMutations','mutations',protection);list('Bei diesem Wetter Ernte pausieren','pauseWeather','weather',protection);
+@@ -40 +48 @@
+-  const weatherInput=document.createElement('input');weatherInput.placeholder='z.B. Rain / Normal';weatherInput.style.cssText=style;row('Wetter-ID',weatherInput,teams);
++  const weatherInput=document.createElement('select');weatherInput.style.cssText=style;row('Wetter',weatherInput,teams);
+@@ -53,3 +61,3 @@
+-  root.appendChild(status);const preview=document.createElement('pre');preview.style.cssText=status.style.cssText;root.appendChild(preview);
+-  button('Plan prüfen (sendet nichts)',()=>{preview.textContent=engine.preview().map(x=>x.module+': '+x.action).join('\n')||'Keine ausführbare Aktion / Spieldaten noch nicht bereit';});
+-  button('Status kopieren',()=>{const text=JSON.stringify(engine.status(),null,2);navigator.clipboard?.writeText(text).then(()=>alert.textContent='Status kopiert',()=>alert.textContent='Kopieren im Browser nicht erlaubt');});
++  const diagnostics=section('Diagnose & Aktionsplan');diagnostics.appendChild(status);const preview=document.createElement('pre');preview.style.cssText=status.style.cssText;diagnostics.appendChild(preview);
++  button('Plan prüfen (sendet nichts)',()=>{preview.textContent=engine.preview().map(x=>x.module+': '+x.action).join('\n')||'Keine ausführbare Aktion / Spieldaten noch nicht bereit';},diagnostics);
++  button('Status kopieren',async()=>{try{if(!navigator.clipboard?.writeText)throw Error('Clipboard fehlt');await navigator.clipboard.writeText(JSON.stringify(engine.status(),null,2));alert.textContent='Status kopiert';}catch{alert.textContent='Kopieren im Browser nicht erlaubt';}},diagnostics);
+@@ -57 +65,7 @@
+-  function options(input,values,current){const ids=values.map(x=>typeof x==='string'?x:x.id),sig=ids.join('|');if(input.dataset.options===sig)return;input.dataset.options=sig;input.textContent='';input.add(new Option('Bitte wählen',''));for(const value of values)input.add(new Option(typeof value==='string'?value:value.name,typeof value==='string'?value:value.id));input.value=current||'';}
++  function options(input,values,current){
++    const rows=values.map(x=>typeof x==='string'?{id:x,name:x.replace(/([a-z0-9])([A-Z])/g,'$1 $2')}:x);
++    if(current&&!rows.some(x=>x.id===current))rows.push({id:current,name:current+' (gespeichert)'});
++    const sig=JSON.stringify(rows);
++    if(input.dataset.options!==sig){input.dataset.options=sig;input.textContent='';input.add(new Option(rows.length?'Bitte wählen':'Warte auf Spielkatalog …',''));for(const value of rows)input.add(new Option(value.name,value.id));}
++    if(input.value!==(current||''))input.value=current||'';
++  }
+@@ -61 +75,3 @@
+-    for(const s of selectors)options(s.input,choices[s.choiceKey]||[],c[s.key]);
++    for(const s of selectors)options(s.input,s.choiceKey==='seeds'?automationChoiceOptions(engine,'plants'):(choices[s.choiceKey]||[]),c[s.key]);
++    for(const picker of pickers)picker.refresh();
++    options(weatherInput,automationChoiceOptions(engine,'weather'),weatherInput.value);
+--- a/tests/main-upgrade.test.cjs
++++ b/tests/main-upgrade.test.cjs
+@@ -397,2 +397,2 @@
+-  h.setRemoteSource(source.replace('// @version      15.0.0',
+-    '// @version      15.0.1'));
++  h.setRemoteSource(source.replace('// @version      15.1.0',
++    '// @version      15.1.1'));
+@@ -400 +400 @@
+-  assert.equal(result.newer, '15.0.1');
++  assert.equal(result.newer, '15.1.1');
+@@ -414 +414 @@
+-  assert.equal(result.status, 'Aktuell: V15.0.0');
++  assert.equal(result.status, 'Aktuell: V15.1.0');
+@@ -441 +441 @@
+-  h.setRemoteSource(source.replace('// @version      15.0.0',
++  h.setRemoteSource(source.replace('// @version      15.1.0',
+@@ -463 +463 @@
+-  assert.equal(item('version'), '15.0.0');
++  assert.equal(item('version'), '15.1.0');
+@@ -492 +492 @@
+-  assert.equal(candidate, '15.0.0');
++  assert.equal(candidate, '15.1.0');
+--- a/README.md
++++ b/README.md
+@@ -1 +1 @@
+-# Magic Garden AutoFarm — V15.0.0
++# Magic Garden AutoFarm — V15.1.0
+@@ -11,0 +12,8 @@
++
++## Oberfläche V15.1
++
++Das kompakte, dunkelbraune Menü hat vier Bereiche: **Farm**, **Felder**, **Automatik** und **Optionen**. Die Titelleiste liegt außerhalb des Scrollbereichs und bleibt mit Status, Versionsnummer und Einklappen-Button immer sichtbar. Verschieben, Einklappen und gespeicherte Positionen funktionieren weiterhin.
++
++Pflanzenarten, Mutationen und Wetter werden über **durchsuchbare Mehrfachauswahlen mit Checkboxen** gewählt, nicht mehr über kommaseparierte IDs. Bei Wetter-Petteams gibt es ebenfalls eine Auswahlliste. Intern bleiben dieselben Werte gespeichert; alte Auswahlen werden auch dann beibehalten, wenn ein Katalogeintrag aktuell fehlt. Leere Kataloge werden als Wartezustand angezeigt. Pro Mehrfachauswahl gilt weiterhin das bestehende Limit von 40 Einträgen.
++
++UI-Regressionsprüfung: `python tests/ui-browser.py` mit Playwright und Chromium (optional `CHROMIUM_PATH`). Der Test läuft vollständig auf `about:blank` mit simulierten Spieldaten, ohne Spiel- oder Netzwerkaktionen. Er prüft Scrollen, Verschieben, schmale Ansichten, Mehrfachauswahl/Suche, alte Einstellungen, Feldeingaben, Start/Stop und den vorhandenen Update-Button.
