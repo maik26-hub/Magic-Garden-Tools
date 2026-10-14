@@ -1,0 +1,39 @@
+name: AutoFarm tests
+on:
+  push:
+    branches: [main, feature/v15-autopilot]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Build if modular sources are present
+        run: |
+          if [ -f scripts/build.cjs ]; then node scripts/build.cjs; fi
+      - name: Syntax and release tests
+        run: |
+          node --version
+          node --check MagicGardenAutoFarm.user.js
+          if [ -f tests/autopilot.test.cjs ]; then
+            node --test tests/autopilot.test.cjs tests/v15-integration.test.cjs
+          else
+            node --test tests/main-upgrade.test.cjs tests/standalone.test.cjs
+          fi
+      - name: Retain test sources and built userscript
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: autofarm-tested-source
+          retention-days: 7
+          path: |
+            *.user.js
+            src/
+            scripts/
+            tests/
+            README.md
