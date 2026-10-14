@@ -88,6 +88,12 @@ with sync_playwright() as p:
         ok('section accessible: '+label,page.locator('.mg-menu-view:visible').count()==1 and page.locator('.mg-location-title').inner_text()==label)
         page.get_by_role('button',name='Zur Übersicht',exact=True).click()
     ok('navigation alone never starts the bot or purchases',page.evaluate('window.__sent.length')==0)
+    page.get_by_role('button',name='Pets & Futter',exact=True).click()
+    advisor=page.get_by_label('Welches Pet-Team optimieren?',exact=True)
+    ok('read-only smart pet advisor available in existing Pets section',advisor.is_visible() and page.get_by_text('Pet-Manager · Boost-Vergleich (Vorschau)').is_visible())
+    advisor.select_option('hatchSpeed')
+    ok('pet optimization goal changes without any game command',advisor.input_value()=='hatchSpeed' and page.evaluate('window.__sent.length')==0)
+    page.get_by_role('button',name='Zur Übersicht',exact=True).click()
     page.set_viewport_size({'width':1280,'height':600});page.wait_for_timeout(100)
     page.get_by_role('button',name='Einkauf',exact=True).click()
     page.get_by_label('Auto-Buy freigeben',exact=True).check()
@@ -162,3 +168,4 @@ with sync_playwright() as p:
     report={'version':VERSION,'checks':len(checks),'passed':checks,'pageErrors':errors,'environment':'Chromium offline document with mocked game/storage; reload simulated by fresh document and persisted stores; no live account requests'}
     (OUT/'report.json').write_text(json.dumps(report,indent=2,ensure_ascii=False))
     print(json.dumps(report,indent=2,ensure_ascii=False)); browser.close()
+

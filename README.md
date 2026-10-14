@@ -1,6 +1,16 @@
-# Magic Garden AutoFarm — V15.2.3
+# Magic Garden AutoFarm — V15.3.0
 
 Eigenständiges Tampermonkey-Skript für Magic Garden. Inoffizielles Community-Projekt, nicht mit dem Spiel verbunden.
+
+## Smart Pet Advisor (V15.3.0)
+
+Unter **Pets & Futter → Pet-Manager · Boost-Vergleich** findest du eine **rein lesende** Auswertung aus eigenem Inventar, den bis zu drei aktiven Pets und dem **Pet Hutch**. Ziel auswählen: Verkauf von Pflanzen, AFK, Hatch-Qualität, Hatch-Speed, Pflanzenwachstum, Crop-Mutationen/-Größe, Pet-Leveln oder Verkauf von Pets/Magic Dust.
+
+Der Manager wertet **nur die tatsächlich am Pet gespeicherten Abilities** aus, nicht alle Fähigkeiten, die seine Art theoretisch bekommen könnte. Aktuelle Stärke, MAX STR und verbleibende Stufen werden aus `xp`, `targetScale` und den Pet-Katalogdaten (`maxScale`, `hoursToMature`) ermittelt. Für passende Ziele wird eine **relative, ausdrücklich heuristische** Priorisierung der Boosts angezeigt; gleiche Abilities werden nach aktueller Stärke und zukünftigem Potenzial verglichen. Wettergebundene Abilities erhalten außerhalb des passenden Wetters keine aktive Bewertung. Unbekannte Abilities oder fehlende XP/Katalogdaten werden **nicht als Nullstärke interpretiert**.
+
+**Keine automatischen Pet-Verkäufe:** Die Liste „schwächere Duplikate“ ist nur eine vorsichtige Vorschau: gleiche Spezies, nachgewiesene gleiche Ei-Herkunft, exakt dieselben Abilities und Mutationen, klar schlechtere aktuelle/maximale Stärke, Inventar-Pet und keine Schutz-/Journalgründe. Favoriten, gesperrte, aktive, Pet-Hutch-/Team-Pets, Mutationen und unklare Journalstände bleiben geschützt. Verkaufs- und Teamswap-Befehle werden von diesem Modul **nicht** gesendet. Es ist noch **kein fertiger Auto-Pet-Sell**, da wir dafür Native-Protokoll und echte Spieldaten separat prüfen müssen.
+
+Die <https://magicgarden.wiki/Pets> und <https://magicgarden.wiki/Abilities> dienen zur Orientierung. Werte und Abilities werden nach Möglichkeit aus den aktuellen **individuellen** Spieldaten gelesen. Die Wiki-Tabelle allein lässt weder die am konkreten Pet gewürfelte Fähigkeit noch seine Max Strength erkennen.
 
 ## Aktualisieren: rote Version oben
 
@@ -12,7 +22,7 @@ Ab **V15.2.3** entfällt die alte Seite **„Updates“** samt **„Update prüf
 
 **Einmaliger Übergang von V15.2.1/V15.2.2:** Diese bereits installierten Versionen kennen die neue rote Versionsplakette noch nicht. Wenn dort „Update-Check fehlgeschlagen“ erscheint, benutze **einmalig Tampermonkey → Dashboard → Nach Userscript-Updates suchen** (beziehungsweise das Updates-Menü der Erweiterung). Tampermonkey prüft die bereits gespeicherte `@updateURL` selbst; du brauchst weder den kaputten In-Game-Check noch einen zusätzlichen Userscript-Link. Wenn der Browser/die Erweiterung den Release nicht laden kann, hilft auch das neue UI nicht ohne Behebung der Netzwerk-/Berechtigungsprobleme.
 
-**Neue Berechtigung:** V15.2.3 nutzt `GM_xmlhttpRequest` und `unsafeWindow`; Tampermonkey darf für den Versionsabruf `raw.githubusercontent.com` kontaktieren. Das bestehende Spiel läuft weiterhin über seine eigenen nativen Verbindungen.
+**Seit V15.2.3:** Das Skript nutzt `GM_xmlhttpRequest` und `unsafeWindow`; Tampermonkey darf für den Versionsabruf `raw.githubusercontent.com` kontaktieren. Das bestehende Spiel läuft weiterhin über seine eigenen nativen Verbindungen.
 
 Name, Namespace, bisherige Update-Adresse, Einstellungen und Feldfarben bleiben erhalten. Kein zweites Userscript, keine QPM-/Garden-Companion-Abhängigkeit.
 

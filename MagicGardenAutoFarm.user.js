@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         Magic Garden AutoFarm
 // @namespace    mg-autofarm-local
-// @version      15.2.3
+// @version      15.3.0
 // @updateURL   https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js
 // @downloadURL https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js
-// @description  V15.2.3: automatic red update badge, clickable install and privileged checks
+// @description  V15.3.0: smart Pet Advisor for boost, XP and Hutch comparison (read-only)
 // @match        https://magicgarden.gg/*
 // @run-at       document-start
 // @grant        GM_xmlhttpRequest
@@ -101,6 +101,10 @@ function identifyNativeCatalogs(exports) {
     if (finite(value.WateringCan?.coinPrice) && object(value.Camera)) out.tools = value;
     if (finite(value.Gold?.coinMultiplier) && typeof value.Gold.group === 'string' && object(value.Wet)) out.mutations = value;
     if (object(value.SeedSilo) && object(value.FeedingTrough) && finite(value.FeedingTrough.coinPrice)) out.decor = value;
+    // Native ability metadata is optional; unavailable values are never guessed.
+    if (object(value.SellBoostI) && object(value.EggGrowthBoost) &&
+      (finite(value.SellBoostI.baseProbability) || object(value.SellBoostI.baseParameters)))
+      out.abilities = value;
     if (Object.keys(out).length > before) return;
     // Module namespaces can export hundreds of symbols. Do not stop before
     // late alphabetically-named catalog exports or recurse into catalog rows.
@@ -181,7 +185,8 @@ function createNativeCatalogSource(env) {
       /\bcoinsToFullyReplenishHunger\b/.test(text) && /\bdiet\b/.test(text),
       /\bcoinMultiplier\b/.test(text) && /\bGrowth\b/.test(text),
       /\bWateringCan\b/.test(text) && /\bcoinPrice\b/.test(text),
-      /\bFeedingTrough\b/.test(text) && /\bcoinPrice\b/.test(text)
+      /\bFeedingTrough\b/.test(text) && /\bcoinPrice\b/.test(text),
+      /\bSellBoostI\b/.test(text) && /\bEggGrowthBoost\b/.test(text)
     ];
     return signals.some(Boolean) && /\bexport\b/.test(text);
   }
@@ -295,6 +300,199 @@ function createNativeCatalogSource(env) {
 }
 
 
+/* Read-only Pet Advisor. No commands, no pet sales, no cross-player data.
+ * Profile scores are heuristic comparisons, not exact coin/XP predictions.
+ * All calculations use the pet's OWN rolled abilities, current XP and max potential.
+ */
+function createPetAdvisor() {
+  'use strict';
+  const goals = [
+    {id:'sellCrops',name:'Pflanzen verkaufen',description:'Sell Boost und Crop Refund'},
+    {id:'afk',name:'AFK / passives Farming',description:'Coin Finder, Hunger und passives XP'},
+    {id:'hatchQuality',name:'Bessere Pet-Hatches',description:'Max Strength, Mutation, Double Hatch und Start-XP'},
+    {id:'hatchSpeed',name:'Eier schneller ausbrüten',description:'Egg Growth Boost'},
+    {id:'plantGrowth',name:'Pflanzenwachstum',description:'Plant Growth Boost'},
+    {id:'cropQuality',name:'Größe & Mutationen',description:'Crop Size, Mutation Boost und Granter'},
+    {id:'xp',name:'Pets leveln',description:'XP Boost und Hunger-Unterstützung'},
+    {id:'sellPets',name:'Pets verkaufen / Magic Dust',description:'Dust Boost und Pet Refund'}
+  ];
+  const groupWeights = {
+    sellCrops:{sellBoost:12,cropRefund:6,doubleHarvest:4,coinFinder:2},
+    afk:{coinFinder:9,hungerBoost:7,hungerRestore:6,petXp:4,seedFinder:3,plantGrowth:2},
+    hatchQuality:{maxStrength:12,petMutation:10,doubleHatch:10,hatchXp:6,petRefund:1},
+    hatchSpeed:{eggGrowth:15,petXp:1,hungerBoost:2},
+    plantGrowth:{plantGrowth:15,cropSize:3,weatherMutation:2},
+    cropQuality:{cropSize:12,weatherMutation:11,granter:9,plantGrowth:4},
+    xp:{petXp:12,hungerRestore:5,hungerBoost:4,hatchXp:2},
+    sellPets:{dustBoost:15,petRefund:4}
+  };
+  const patterns = [
+    [/^(?:Snowy|Dawn|Thunder)?CoinFinder/i,'coinFinder'],
+    [/^SellBoost/i,'sellBoost'],[/^ProduceRefund$/i,'cropRefund'],
+    [/^DoubleHarvest$/i,'doubleHarvest'],[/^DustBoost$/i,'dustBoost'],
+    [/^PetRefund/i,'petRefund'],[/^DoubleHatch/i,'doubleHatch'],
+    [/^PetHatchSizeBoost/i,'maxStrength'],[/^PetMutationBoost/i,'petMutation'],
+    [/^PetAgeBoost/i,'hatchXp'],[/^(?:Snowy|Thunder|Amber)?EggGrowthBoost/i,'eggGrowth'],
+    [/^(?:Snowy|Dawn|Amber|Thunder)?PlantGrowthBoost/i,'plantGrowth'],
+    [/^(?:Snowy)?(?:ProduceScaleBoost|CropSizeBoost)/i,'cropSize'],
+    [/^(?:Snowy|Dawn|Thunder|Amber)?(?:ProduceMutationBoost|CropMutationBoost)|^DawnBoost$|^AmberMoonBoost$|^ThunderBoost$/i,'weatherMutation'],
+    [/Granter$|^RainDance$/,'granter'],
+    [/^(?:Snowy|Dawn|Thunder|Amber)?(?:PetXpBoost|DawnXpBoost|ThunderXpBoost|AmberXpBoost)/i,'petXp'],
+    [/^HungerBoost|^SnowyHungerBoost/i,'hungerBoost'],
+    [/^HungerRestore|^SnowyHungerRestore/i,'hungerRestore'],
+    [/^SeedFinder/i,'seedFinder']
+  ];
+  const conditionByAbility = [
+    [/^Snowy|^Snow|^Frost/i,['Snow','Winter','Frost']],
+    [/^Dawn/i,['Dawn']], [/^Amber/i,['AmberMoon','Amber']],
+    [/^Thunder/i,['Thunderstorm','Thunder']]
+  ];
+  const isObject=x=>x&&typeof x==='object'&&!Array.isArray(x);
+  const finite=x=>typeof x==='number'&&Number.isFinite(x);
+  const arr=x=>Array.isArray(x)?x:[];
+  const text=x=>typeof x==='string'&&x.length<120?x:'';
+  const human=x=>String(x||'').replace(/([a-z0-9])([A-Z])/g,'$1 $2').replace(/_/g,' ');
+  const abilityGroup=id=>patterns.find(([rx])=>rx.test(id))?.[1]||'other';
+  const conditional=id=>conditionByAbility.find(([rx])=>rx.test(id))?.[1]||null;
+  const permittedWeather=(id,weather)=>{
+    const allowed=conditional(id);
+    return !allowed||allowed.includes(weather);
+  };
+  function strength(pet,info) {
+    if(!isObject(info)||!finite(info.maxScale)||info.maxScale<=1||
+       !finite(info.hoursToMature)||info.hoursToMature<=0||
+       !finite(pet.targetScale)||!finite(pet.xp)||pet.xp<0)return null;
+    const max=Math.floor(((pet.targetScale-1)/(info.maxScale-1))*20+80);
+    if(!Number.isFinite(max)||max<80||max>100)return null;
+    const perLevel=Math.floor(3600*info.hoursToMature/30);
+    if(perLevel<1)return null;
+    const grown=Math.min(30,Math.floor(pet.xp/perLevel));
+    const current=max-30+grown;
+    return {current,max,base:max-30,progress:grown,stepsRemaining:30-grown,
+      xpPerLevel:perLevel,xpToNext:grown===30?0:perLevel-(pet.xp%perLevel)};
+  }
+  function gather(s) {
+    const own=s?.own,inv=s?.inventory;
+    if(!isObject(own)||!isObject(inv)||!Array.isArray(inv.items))return [];
+    const seen=new Set(),pets=[];
+    const add=(items,place)=>{
+      for(const item of arr(items)){
+        if(!isObject(item)||!text(item.id)||!text(item.petSpecies)||
+          seen.has(item.id))continue;
+        if(place!=='Aktiv'&&item.itemType!=='Pet')continue;
+        seen.add(item.id);
+        pets.push({...item,location:place});
+      }
+    };
+    add(own.petSlots,'Aktiv');
+    add(inv.items,'Inventar');
+    for(const storage of arr(inv.storages)){
+      if(storage?.decorId==='PetHutch')add(storage.items,'Pet Hutch');
+    }
+    return pets;
+  }
+  function profile(pet,petCatalog,abilityCatalog,goal,weather) {
+    const metrics=strength(pet,petCatalog?.[pet.petSpecies]);
+    const abilities=arr(pet.abilities).filter(text);
+    const weights=groupWeights[goal]||groupWeights.afk;
+    const scoreAt=value=>{
+      let score=0;
+      const highlights=[];
+      for(const id of abilities){
+        const group=abilityGroup(id),weight=weights[group]||0;
+        if(!weight)continue;
+        const allowed=permittedWeather(id,weather);
+        const strengthFactor=value===null?0:value/100;
+        // Tier factor is a planning heuristic, never an asserted game formula.
+        const tier=/IV$/.test(id)?1.6:/III$/.test(id)?1.35:/II(?:_NEW)?$/.test(id)?1.15:1;
+        const contribution=allowed?weight*strengthFactor*tier:0;
+        score+=contribution;
+        const detail=abilityCatalog?.[id];
+        const baseChance=finite(detail?.baseProbability)?detail.baseProbability:null;
+        const chance=baseChance===null||value===null?null:Math.round(baseChance*value)/100;
+        highlights.push({id,name:text(detail?.name)||human(id),group,activeInWeather:allowed,
+          strength: value,approxChancePercent:chance,weight:contribution});
+      }
+      return {score:Math.round(score*100)/100,highlights};
+    };
+    const now=scoreAt(metrics?.current??null);
+    const future=scoreAt(metrics?.max??null);
+    return {now,future,metrics,abilities,abilityNames:abilities.map(id=>text(abilityCatalog?.[id]?.name)||human(id)),
+      rated:!!metrics&&abilities.length>0&&abilities.some(id=>Boolean(weights[abilityGroup(id)]))};
+  }
+  function protectedReasons(pet,s) {
+    const reasons=[];
+    const favored=arr(s?.inventory?.favoritedItemIds);
+    if(favored.includes(pet.id))reasons.push('Favorit');
+    if(pet.locked||pet.isLocked||pet.protected||pet.isProtected)reasons.push('Gesperrt');
+    if(pet.location==='Aktiv')reasons.push('Aktives Pet');
+    if(pet.location==='Pet Hutch')reasons.push('Im Pet Hutch');
+    const teams=arr(s?.own?.petTeams);
+    if(teams.some(t=>arr(t?.members).some(m=>m?.petId===pet.id)))reasons.push('Gespeichertes Team');
+    if(arr(pet.mutations).length)reasons.push('Mutation');
+    if(!text(pet.sourceEggId))reasons.push('Herkunftsei unbekannt');
+    const journal=s?.own?.journal?.pets?.[pet.petSpecies];
+    if(!isObject(journal)||!Array.isArray(journal.abilitiesLogged)||
+      !Array.isArray(journal.variantsLogged))reasons.push('Journal noch unvollständig/unklar');
+    else {
+      const logged=new Set(journal.abilitiesLogged.map(x=>x?.ability));
+      if(arr(pet.abilities).some(a=>!logged.has(a)))reasons.push('Ungesehene Fähigkeit');
+      const variants=new Set(journal.variantsLogged.map(x=>x?.variant));
+      if(!variants.has('Normal'))reasons.push('Normalvariante im Journal fehlt');
+    }
+    return reasons;
+  }
+  function analyze(snapshot,catalogs={},goal='afk') {
+    const profiles=[];
+    const pets=gather(snapshot);
+    const weather=text(snapshot?.game?.weather)||text(snapshot?.game?.weatherWindow?.weatherId)||'Normal';
+    const actualGoal=groupWeights[goal]?goal:'afk';
+    const teamRefs=new Set(arr(snapshot?.own?.petTeams).flatMap(t=>arr(t?.members).map(m=>m?.petId)));
+    for(const pet of pets){
+      const report=profile(pet,catalogs.pets,catalogs.abilities,actualGoal,weather);
+      const reasons=protectedReasons(pet,snapshot);
+      profiles.push({id:pet.id,name:text(pet.name)||text(catalogs.pets?.[pet.petSpecies]?.name)||human(pet.petSpecies),
+        species:pet.petSpecies,location:pet.location,sourceEggId:text(pet.sourceEggId)||null,
+        mutations:arr(pet.mutations).filter(text),abilities:report.abilities,
+        abilityNames:report.abilityNames,now:report.now,future:report.future,metrics:report.metrics,
+        rated:report.rated,hunger:finite(pet.hunger)?pet.hunger:null,
+        teamMember:teamRefs.has(pet.id),protected:reasons.length>0,protection:reasons
+      });
+    }
+    // Unknown strength / unrecognized abilities are not silently rated as zero.
+    const eligible=profiles.filter(p=>p.rated).sort((a,b)=>
+      b.now.score-a.now.score||b.future.score-a.future.score||a.name.localeCompare(b.name,'de'));
+    const recommendations=eligible.slice(0,3);
+    const reviews=[];
+    for(const candidate of profiles){
+      if(candidate.location!=='Inventar'||candidate.protected||!candidate.metrics||
+         !candidate.abilities.length)continue;
+      const peer=profiles.find(other=>
+        other.id!==candidate.id&&other.species===candidate.species&&
+        other.sourceEggId===candidate.sourceEggId&&other.sourceEggId!==null&&
+        other.metrics&&other.metrics.current>=candidate.metrics.current&&
+        other.metrics.max>=candidate.metrics.max&&
+        (other.metrics.current>candidate.metrics.current||other.metrics.max>candidate.metrics.max)&&
+        JSON.stringify([...other.abilities].sort())===JSON.stringify([...candidate.abilities].sort())&&
+        JSON.stringify([...other.mutations].sort())===JSON.stringify([...candidate.mutations].sort()));
+      if(peer)reviews.push({id:candidate.id,name:candidate.name,reason:'Schwächeres identisches Duplikat als '+peer.name,
+        comparedTo:peer.id});
+    }
+    return {goal:actualGoal,goalName:goals.find(g=>g.id===actualGoal).name,weather,
+      count:profiles.length,locations:{
+        active:profiles.filter(x=>x.location==='Aktiv').length,
+        inventory:profiles.filter(x=>x.location==='Inventar').length,
+        hutch:profiles.filter(x=>x.location==='Pet Hutch').length
+      },
+      profiles,recommendations:recommendations.map(p=>p.id),
+      reviews,readOnly:true,coverage:profiles.filter(x=>x.rated).length,
+      notice:'Relative, nicht garantierte Team-Bewertung. Verkaufsvorschläge sind nur zur manuellen Prüfung.'
+    };
+  }
+  return {goals,analyze,abilityGroup,strength};
+}
+if(typeof module!=='undefined'&&module.exports)module.exports={createPetAdvisor};
+
 /* Native command shapes verified against public game build 1517.
  * Original implementation. The caller owns the only execution loop. */
 function createAutomationCore(env) {
@@ -334,6 +532,7 @@ function createAutomationCore(env) {
     out.teamRules=arr(v.teamRules).filter(r=>obj(r)&&str(r.weather)&&str(r.teamId)).slice(0,15).map(r=>({weather:r.weather,teamId:r.teamId}));return out;
   }
   let config=normalize(read(KEY,{})),catalogs={},catalogMessage='Warte auf Spielkataloge',loading=false,nextCatalogAt=0,catalogFailures=0,lastActionAt=-Infinity,busy=false,lastModule='',runGeneration=0;
+  const petAdvisor=(typeof createPetAdvisor==='function' ? createPetAdvisor : require('./pet-advisor.js').createPetAdvisor)();
   const counts=Object.fromEntries(Object.keys(names).map(k=>[k,0])),reasons={},events=[],receipts=new Map();
   for(const r of arr(read(RECEIPTS,[])).slice(-200))if(obj(r)&&typeof r.key==='string'&&r.key.length<400&&num(r.until)&&r.until>env.now()&&typeof r.fp==='string')receipts.set(r.key,r);
   const now=()=>env.now();
@@ -369,7 +568,7 @@ function createAutomationCore(env) {
       catalogs = {...catalogs, ...found};
       const keys = Object.keys(catalogs);
       const names = {plants:'Pflanzen',eggs:'Eier',pets:'Pets',tools:'Werkzeuge',decor:'Dekoration',mutations:'Mutationen'};
-      const all = keys.length >= 6;
+      const all = ['plants','eggs','pets','tools','decor','mutations'].every(key=>!!catalogs[key]);
       catalogMessage = keys.length ? 'Geladen: ' + keys.map(k=>names[k]||k).join(', ') : 'Suche aktuelle Spielkataloge – automatischer Neuversuch';
       catalogFailures = all ? 0 : Math.min(catalogFailures + 1, 3);
       nextCatalogAt = now() + (all ? 300000 : [2000,2000,5000,10000][catalogFailures]);
@@ -545,7 +744,7 @@ function createAutomationCore(env) {
       fields:s?{plant:plots(s,'plant').length,egg:plots(s,'egg').length}:null
     };
   }
-  return {menuChoices,configure,getConfig:()=>structuredClone(config),step,preview,status,loadCatalogs,harvestAllowed,saleAllowed,produceValue,resetCounters(){for(const k of Object.keys(counts))counts[k]=0;events.length=0;},stop(){runGeneration++;},catalogs:()=>catalogs,choices(){const s=snapshot();return {seeds:Object.keys(catalogs.plants||{}),eggs:Object.keys(catalogs.eggs||{}),tools:Object.keys(catalogs.tools||{}),decor:Object.keys(catalogs.decor||{}),pets:arr(s?.own.petTeams).map(t=>({id:t.id,name:t.name||'Team'}))};}};
+  return {menuChoices,configure,getConfig:()=>structuredClone(config),step,preview,status,loadCatalogs,harvestAllowed,saleAllowed,produceValue,petGoals:petAdvisor.goals,analyzePets:goal=>petAdvisor.analyze(snapshot(),catalogs,goal),resetCounters(){for(const k of Object.keys(counts))counts[k]=0;events.length=0;},stop(){runGeneration++;},catalogs:()=>catalogs,choices(){const s=snapshot();return {seeds:Object.keys(catalogs.plants||{}),eggs:Object.keys(catalogs.eggs||{}),tools:Object.keys(catalogs.tools||{}),decor:Object.keys(catalogs.decor||{}),pets:arr(s?.own.petTeams).map(t=>({id:t.id,name:t.name||'Team'}))};}};
 }
 
 
@@ -677,7 +876,83 @@ function mountAutomationUI(parent, engine, document) {
   number('Ernten ab Basiswert (0 = alle)','minHarvestValue',0,1e12,protection);list('Nur diese Mutationen ernten','wantedMutations',protection);list('Bei diesem Wetter Ernte pausieren','pauseWeather',protection);
   const hints=document.createElement('small');hints.textContent='Native Sperren und der vorhandene Mutations-/Max-Größen-Schutz haben immer Vorrang. Favoriten werden nie automatisch entsperrt. Basiswert ist ohne Verkaufs-/Freundesbonus.';protection.appendChild(hints);
   const pets=section('Pets, Futter & Lager');check('Aktive Pets automatisch füttern','feed',pets);number('Füttern unter Hungerfüllstand (%)','hungerPercent',1,90,pets);number('Maximaler Futter-Basiswert','foodMaxValue',1,1e9,pets);
+
   check('Futtertrog nachfüllen','trough',pets);number('Ziel: Futter im Trog','troughItems',0,50,pets);check('Bestehende Lagerstapel auffüllen','storage',pets);
+  // Smart Pet Advisor: observation only. Never sell, move, swap or unlock pets
+  // through this panel until actual server commands and protection are verified.
+  const advisorPanel=document.createElement('details');advisorPanel.className='mg-pet-advisor';advisorPanel.open=true;
+  const advisorHeading=document.createElement('summary');advisorHeading.textContent='Pet-Manager · Boost-Vergleich (Vorschau)';
+  advisorPanel.appendChild(advisorHeading);
+  const advisorGoal=document.createElement('select');advisorGoal.style.cssText=style;
+  advisorGoal.setAttribute('aria-label','Welches Pet-Team optimieren?');
+  for(const goal of engine.petGoals||[]){
+    const option=document.createElement('option');option.value=goal.id;option.textContent=goal.name;advisorGoal.appendChild(option);
+  }
+  advisorGoal.value='afk';
+  row('Welches Pet-Team optimieren?',advisorGoal,advisorPanel).classList.add('mg-wide-choice');
+  const advisorText=document.createElement('div');advisorText.className='mg-pet-advisor-results';
+  advisorPanel.appendChild(advisorText);
+  explain('Nur Analyse: Keine Pets werden verkauft, verschoben oder automatisch ins Team eingesetzt. Ein hoher Vergleichswert ist eine relative Empfehlung, kein garantierter Bonus.',advisorPanel);
+  pets.appendChild(advisorPanel);
+  let lastPetSignature='';
+  function refreshPetAdvisor(){
+    // No repeated DOM redraws in other tabs: selection/search focus remains.
+    if(pets.closest('.mg-menu-view')?.hidden)return;
+    const report=engine.analyzePets?.(advisorGoal.value);
+    if(!report)return;
+    const signature=JSON.stringify(report);
+    if(signature===lastPetSignature)return;
+    lastPetSignature=signature;advisorText.replaceChildren();
+    const make=(tag,text)=>{
+      const el=document.createElement(tag);el.textContent=text;return el;
+    };
+    advisorText.appendChild(make('p',
+      'Pets: '+report.count+' · Aktiv: '+report.locations.active+
+      ' · Inventar: '+report.locations.inventory+' · Pet Hutch: '+report.locations.hutch+
+      ' · Wetter: '+report.weather));
+    if(!report.count){
+      advisorText.appendChild(make('p','Noch keine eigenen Pet-Daten. Warte auf den Spielzustand.'));
+      return;
+    }
+    advisorText.appendChild(make('p',
+      'Bewertbar: '+report.coverage+'/'+report.count+
+      ' · Fehlende Kataloge, XP oder Fähigkeiten werden nicht geraten.'));
+    const recommended=new Set(report.recommendations);
+    advisorText.appendChild(make('h4','Empfohlenes Team für '+report.goalName));
+    const chosen=report.profiles.filter(p=>recommended.has(p.id))
+      .sort((a,b)=>b.now.score-a.now.score);
+    if(!chosen.length)advisorText.appendChild(make('p',
+      'Noch keine belastbare Empfehlung. Pet-Katalog und echte individuelle Fähigkeiten abwarten.'));
+    for(const pet of chosen){
+      const card=make('article','');card.className='mg-pet-advisor-card';
+      card.appendChild(make('strong',pet.name+' · '+pet.location));
+      card.appendChild(make('div',pet.metrics
+        ? 'STR '+pet.metrics.current+'/'+pet.metrics.max+' · Stufe '+pet.metrics.progress+'/30'
+        : 'Stärke unklar – Katalog- oder XP-Wert fehlt'));
+      card.appendChild(make('div',
+        'Relative Bewertung: jetzt '+pet.now.score+
+        ' · bei Max STR '+pet.future.score));
+      card.appendChild(make('small',pet.now.highlights.map(b=>
+        b.name+(b.activeInWeather?'':' (nur bei passendem Wetter)')).join(', ') ||
+        'Keine passende Fähigkeit erkannt'));
+      advisorText.appendChild(card);
+    }
+    const inventory=document.createElement('details');
+    inventory.className='mg-pet-advisor-list';inventory.appendChild(make('summary','Alle Pets vergleichen ('+report.profiles.length+')'));
+    for(const pet of report.profiles){
+      const p=make('p',pet.name+' · '+pet.location+' · '+
+        (pet.metrics?'STR '+pet.metrics.current+'/'+pet.metrics.max:'STR ?')+
+        ' · '+(pet.abilityNames.join(', ')||'Fähigkeiten unbekannt')+
+        (pet.protection.length?' · Geschützt: '+pet.protection.join(', '):''));
+      inventory.appendChild(p);
+    }
+    advisorText.appendChild(inventory);
+    advisorText.appendChild(make('p',
+      'Duplikat-Vorschau: '+report.reviews.length+
+      ' eindeutige schwächere Kandidaten. Keine automatische Verkaufsfreigabe.'));
+  }
+  advisorGoal.addEventListener('change',()=>{lastPetSignature='';refreshPetAdvisor();});
+
   const quests=section('Journal & tägliche Quests');check('Neue Journalvarianten fotografieren','journal',quests);check('Fertige Belohnungen abholen','claims',quests);
   const qnote=document.createElement('small');qnote.textContent='Camera benötigt. Questbelohnungen werden nicht teilweise verworfen. Quests werden nicht blind durch Einkäufe oder Umgraben erzwungen.';quests.appendChild(qnote);
   const teams=section('Wetterabhängige Petteams');check('Vorhandene Teams wechseln','teams',teams);
@@ -736,6 +1011,7 @@ function mountAutomationUI(parent, engine, document) {
     placementFilter.hidden=!c.eggs||c.eggPlaceMode!=='selected';
     fieldInfo.textContent=choices.fields?`Felder: ${choices.fields.plant} grün für Pflanzen · ${choices.fields.egg} blau für Eier. Grau wird ignoriert.`:'Felder in „Felder“ grün oder blau markieren. Grau wird ignoriert.';
     pickers.refresh(choices);pickers.options(weatherInput,choices.weather,weatherInput.value,'Wetter wählen');pickers.options(teamSelect,choices.pets,teamSelect.value,'Team wählen');refreshBuy(choices);
+    refreshPetAdvisor();
     status.textContent='Kataloge: '+info.catalogs+'\nWetter: '+(choices.weather.find(w=>w.id===info.weather)?.name||info.weather)+'\nKäufe heute: '+info.spentToday.toLocaleString('de-DE')+' Coins'+'\n'+info.modules.filter(m=>m.on).map(m=>m.label+': '+m.confirmed+' · '+m.status).join('\n')+(info.sell?'\nVerkauf: '+info.sell:'');
     const sig=JSON.stringify([c.buyRules,c.teamRules,choices.seeds.map(x=>[x.id,x.name]),choices.eggs.map(x=>[x.id,x.name]),choices.tools.map(x=>[x.id,x.name]),choices.decor.map(x=>[x.id,x.name]),choices.pets]);
     if(sig!==lastSignature){
@@ -1214,7 +1490,7 @@ function mountFieldGrid(container, plan, onChange) {
   }
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-  const VERSION = "15.2.3";
+  const VERSION = "15.3.0";
   const UPDATE_URL = "https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js";
   const NUMBER_FIELDS = Object.freeze({
     sellThreshold: { min: 5, max: 200, step: 1 },
@@ -2618,5 +2894,5 @@ function mountFieldGrid(container, plan, onChange) {
   if (readValue(sessionStorage, KEYS.resume) === "1") {
     start({ auto: true });
   }
-  console.log("✅ Magic Garden AutoFarm V15.2.3 geladen (Automationszentrale, ohne Fremdskripte).");
+  console.log("✅ Magic Garden AutoFarm V15.3.0 geladen (Automationszentrale, ohne Fremdskripte).");
 })();

@@ -61,7 +61,83 @@ function mountAutomationUI(parent, engine, document) {
   number('Ernten ab Basiswert (0 = alle)','minHarvestValue',0,1e12,protection);list('Nur diese Mutationen ernten','wantedMutations',protection);list('Bei diesem Wetter Ernte pausieren','pauseWeather',protection);
   const hints=document.createElement('small');hints.textContent='Native Sperren und der vorhandene Mutations-/Max-Größen-Schutz haben immer Vorrang. Favoriten werden nie automatisch entsperrt. Basiswert ist ohne Verkaufs-/Freundesbonus.';protection.appendChild(hints);
   const pets=section('Pets, Futter & Lager');check('Aktive Pets automatisch füttern','feed',pets);number('Füttern unter Hungerfüllstand (%)','hungerPercent',1,90,pets);number('Maximaler Futter-Basiswert','foodMaxValue',1,1e9,pets);
+
   check('Futtertrog nachfüllen','trough',pets);number('Ziel: Futter im Trog','troughItems',0,50,pets);check('Bestehende Lagerstapel auffüllen','storage',pets);
+  // Smart Pet Advisor: observation only. Never sell, move, swap or unlock pets
+  // through this panel until actual server commands and protection are verified.
+  const advisorPanel=document.createElement('details');advisorPanel.className='mg-pet-advisor';advisorPanel.open=true;
+  const advisorHeading=document.createElement('summary');advisorHeading.textContent='Pet-Manager · Boost-Vergleich (Vorschau)';
+  advisorPanel.appendChild(advisorHeading);
+  const advisorGoal=document.createElement('select');advisorGoal.style.cssText=style;
+  advisorGoal.setAttribute('aria-label','Welches Pet-Team optimieren?');
+  for(const goal of engine.petGoals||[]){
+    const option=document.createElement('option');option.value=goal.id;option.textContent=goal.name;advisorGoal.appendChild(option);
+  }
+  advisorGoal.value='afk';
+  row('Welches Pet-Team optimieren?',advisorGoal,advisorPanel).classList.add('mg-wide-choice');
+  const advisorText=document.createElement('div');advisorText.className='mg-pet-advisor-results';
+  advisorPanel.appendChild(advisorText);
+  explain('Nur Analyse: Keine Pets werden verkauft, verschoben oder automatisch ins Team eingesetzt. Ein hoher Vergleichswert ist eine relative Empfehlung, kein garantierter Bonus.',advisorPanel);
+  pets.appendChild(advisorPanel);
+  let lastPetSignature='';
+  function refreshPetAdvisor(){
+    // No repeated DOM redraws in other tabs: selection/search focus remains.
+    if(pets.closest('.mg-menu-view')?.hidden)return;
+    const report=engine.analyzePets?.(advisorGoal.value);
+    if(!report)return;
+    const signature=JSON.stringify(report);
+    if(signature===lastPetSignature)return;
+    lastPetSignature=signature;advisorText.replaceChildren();
+    const make=(tag,text)=>{
+      const el=document.createElement(tag);el.textContent=text;return el;
+    };
+    advisorText.appendChild(make('p',
+      'Pets: '+report.count+' · Aktiv: '+report.locations.active+
+      ' · Inventar: '+report.locations.inventory+' · Pet Hutch: '+report.locations.hutch+
+      ' · Wetter: '+report.weather));
+    if(!report.count){
+      advisorText.appendChild(make('p','Noch keine eigenen Pet-Daten. Warte auf den Spielzustand.'));
+      return;
+    }
+    advisorText.appendChild(make('p',
+      'Bewertbar: '+report.coverage+'/'+report.count+
+      ' · Fehlende Kataloge, XP oder Fähigkeiten werden nicht geraten.'));
+    const recommended=new Set(report.recommendations);
+    advisorText.appendChild(make('h4','Empfohlenes Team für '+report.goalName));
+    const chosen=report.profiles.filter(p=>recommended.has(p.id))
+      .sort((a,b)=>b.now.score-a.now.score);
+    if(!chosen.length)advisorText.appendChild(make('p',
+      'Noch keine belastbare Empfehlung. Pet-Katalog und echte individuelle Fähigkeiten abwarten.'));
+    for(const pet of chosen){
+      const card=make('article','');card.className='mg-pet-advisor-card';
+      card.appendChild(make('strong',pet.name+' · '+pet.location));
+      card.appendChild(make('div',pet.metrics
+        ? 'STR '+pet.metrics.current+'/'+pet.metrics.max+' · Stufe '+pet.metrics.progress+'/30'
+        : 'Stärke unklar – Katalog- oder XP-Wert fehlt'));
+      card.appendChild(make('div',
+        'Relative Bewertung: jetzt '+pet.now.score+
+        ' · bei Max STR '+pet.future.score));
+      card.appendChild(make('small',pet.now.highlights.map(b=>
+        b.name+(b.activeInWeather?'':' (nur bei passendem Wetter)')).join(', ') ||
+        'Keine passende Fähigkeit erkannt'));
+      advisorText.appendChild(card);
+    }
+    const inventory=document.createElement('details');
+    inventory.className='mg-pet-advisor-list';inventory.appendChild(make('summary','Alle Pets vergleichen ('+report.profiles.length+')'));
+    for(const pet of report.profiles){
+      const p=make('p',pet.name+' · '+pet.location+' · '+
+        (pet.metrics?'STR '+pet.metrics.current+'/'+pet.metrics.max:'STR ?')+
+        ' · '+(pet.abilityNames.join(', ')||'Fähigkeiten unbekannt')+
+        (pet.protection.length?' · Geschützt: '+pet.protection.join(', '):''));
+      inventory.appendChild(p);
+    }
+    advisorText.appendChild(inventory);
+    advisorText.appendChild(make('p',
+      'Duplikat-Vorschau: '+report.reviews.length+
+      ' eindeutige schwächere Kandidaten. Keine automatische Verkaufsfreigabe.'));
+  }
+  advisorGoal.addEventListener('change',()=>{lastPetSignature='';refreshPetAdvisor();});
+
   const quests=section('Journal & tägliche Quests');check('Neue Journalvarianten fotografieren','journal',quests);check('Fertige Belohnungen abholen','claims',quests);
   const qnote=document.createElement('small');qnote.textContent='Camera benötigt. Questbelohnungen werden nicht teilweise verworfen. Quests werden nicht blind durch Einkäufe oder Umgraben erzwungen.';quests.appendChild(qnote);
   const teams=section('Wetterabhängige Petteams');check('Vorhandene Teams wechseln','teams',teams);
@@ -120,6 +196,7 @@ function mountAutomationUI(parent, engine, document) {
     placementFilter.hidden=!c.eggs||c.eggPlaceMode!=='selected';
     fieldInfo.textContent=choices.fields?`Felder: ${choices.fields.plant} grün für Pflanzen · ${choices.fields.egg} blau für Eier. Grau wird ignoriert.`:'Felder in „Felder“ grün oder blau markieren. Grau wird ignoriert.';
     pickers.refresh(choices);pickers.options(weatherInput,choices.weather,weatherInput.value,'Wetter wählen');pickers.options(teamSelect,choices.pets,teamSelect.value,'Team wählen');refreshBuy(choices);
+    refreshPetAdvisor();
     status.textContent='Kataloge: '+info.catalogs+'\nWetter: '+(choices.weather.find(w=>w.id===info.weather)?.name||info.weather)+'\nKäufe heute: '+info.spentToday.toLocaleString('de-DE')+' Coins'+'\n'+info.modules.filter(m=>m.on).map(m=>m.label+': '+m.confirmed+' · '+m.status).join('\n')+(info.sell?'\nVerkauf: '+info.sell:'');
     const sig=JSON.stringify([c.buyRules,c.teamRules,choices.seeds.map(x=>[x.id,x.name]),choices.eggs.map(x=>[x.id,x.name]),choices.tools.map(x=>[x.id,x.name]),choices.decor.map(x=>[x.id,x.name]),choices.pets]);
     if(sig!==lastSignature){

@@ -16,6 +16,10 @@ function identifyNativeCatalogs(exports) {
     if (finite(value.WateringCan?.coinPrice) && object(value.Camera)) out.tools = value;
     if (finite(value.Gold?.coinMultiplier) && typeof value.Gold.group === 'string' && object(value.Wet)) out.mutations = value;
     if (object(value.SeedSilo) && object(value.FeedingTrough) && finite(value.FeedingTrough.coinPrice)) out.decor = value;
+    // Native ability metadata is optional; unavailable values are never guessed.
+    if (object(value.SellBoostI) && object(value.EggGrowthBoost) &&
+      (finite(value.SellBoostI.baseProbability) || object(value.SellBoostI.baseParameters)))
+      out.abilities = value;
     if (Object.keys(out).length > before) return;
     // Module namespaces can export hundreds of symbols. Do not stop before
     // late alphabetically-named catalog exports or recurse into catalog rows.
@@ -96,7 +100,8 @@ function createNativeCatalogSource(env) {
       /\bcoinsToFullyReplenishHunger\b/.test(text) && /\bdiet\b/.test(text),
       /\bcoinMultiplier\b/.test(text) && /\bGrowth\b/.test(text),
       /\bWateringCan\b/.test(text) && /\bcoinPrice\b/.test(text),
-      /\bFeedingTrough\b/.test(text) && /\bcoinPrice\b/.test(text)
+      /\bFeedingTrough\b/.test(text) && /\bcoinPrice\b/.test(text),
+      /\bSellBoostI\b/.test(text) && /\bEggGrowthBoost\b/.test(text)
     ];
     return signals.some(Boolean) && /\bexport\b/.test(text);
   }
