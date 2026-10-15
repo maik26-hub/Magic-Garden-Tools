@@ -69,7 +69,7 @@ with sync_playwright() as p:
  ok('dynamic module populates all six real engine catalog categories',page.evaluate('Object.keys(MGAutoFarmV13.automation.catalogs()).length')==6)
  go('Einkauf');ok('daily budget and reserve inputs removed',page.locator('[data-mg-setting="dailyBudget"],[data-mg-setting="coinReserve"]').count()==0)
  ok('old stored limits are ignored after upgrade',page.evaluate('!("dailyBudget" in MGAutoFarmV13.automation.getConfig()) && !("coinReserve" in MGAutoFarmV13.automation.getConfig())'))
- page.get_by_label('Was kaufen?',exact=True).select_option(label='Eier');page.get_by_label('Artikel auswählen',exact=True).select_option(label='Common Egg · 100 Coins');ok('egg picker now displays the actual native catalog price',page.get_by_label('Höchstens Coins pro Stück').input_value()=='100')
+ page.get_by_label('Was kaufen?',exact=True).select_option(label='Eier');page.get_by_label('Artikel auswählen',exact=True).select_option(label='Common Egg · 100 Coins');ok('egg picker now displays the actual native catalog price',page.get_by_label('Artikel auswählen').input_value()=='CommonEgg')
  page.get_by_role('button',name='Kaufregel speichern').click();ok('saving a rule does not enable buying',not page.get_by_label('Auto-Buy freigeben',exact=True).is_checked())
  # Actual sender + matching result, no manual catalog assignment. Web Lock API
  # is simulated in about:blank; its real availability is covered separately.

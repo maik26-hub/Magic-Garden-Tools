@@ -11,7 +11,7 @@ permissions:
 jobs:
   browser:
     runs-on: ubuntu-latest
-    timeout-minutes: 6
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
         with:
@@ -33,6 +33,7 @@ jobs:
           python tests/browser/compact_menu.py
           python tests/browser/field_choices.py
           python tests/browser/catalog_recovery.py
+          python tests/browser/v16_integration.py
       - name: Save screenshots and assertion report
         if: always()
         uses: actions/upload-artifact@v4

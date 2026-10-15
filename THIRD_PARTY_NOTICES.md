@@ -26,6 +26,12 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-## Magic Garden
+## Magic Garden and Aries
 
-Magic Garden game code, names and artwork belong to their respective owners. Publicly served game assets were examined to determine native command shapes. They and their artwork are not included in this repository. AutoFarm is an unofficial community tool and is not endorsed by the game developer.
+Magic Garden game code, names and artwork belong to their respective owners.
+Publicly served assets were examined only for native protocol/schema facts.
+The V16 effect planner is an independent implementation, not a copy of Aries'
+team-building source and not an import of its unsaved recommendations.
+No public game bundles, artwork, fonts, account cookies or access tokens are
+redistributed in this package. AutoFarm is unofficial and not endorsed by
+Magic Garden or the author of Aries.

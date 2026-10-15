@@ -40,7 +40,7 @@ function createNativeCatalogSource(env) {
   const now = env.now || (() => Date.now());
   const resources = new Map(), imported = new Map(), catalogData = {};
   let observer = null, flight = null, totalBytes = 0, release = '', issue = '', stopped = false;
-  const groups = ['plants', 'pets', 'eggs', 'tools', 'mutations', 'decor'];
+  const groups = ['plants', 'pets', 'eggs', 'tools', 'mutations', 'decor', 'abilities'];
   const full = () => groups.every(group => catalogData[group]);
   function context() {
     try {
