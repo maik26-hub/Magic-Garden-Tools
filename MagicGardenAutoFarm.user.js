@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         Magic Garden AutoFarm
 // @namespace    mg-autofarm-local
-// @version      16.1.0
+// @version      16.2.0
 // @updateURL   https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js
 // @downloadURL https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js
-// @description  V16.1.0: action-combo hatch/sell teams, AFK synergies and persisted effect teams
+// @description  V16.2.0: live crop-rule rechecks and full-inventory pet boost coverage
 // @match        https://magicgarden.gg/*
 // @run-at       document-start
 // @grant        GM_xmlhttpRequest
@@ -904,21 +904,34 @@ function createEffectTeamBuilder() {
     }
     for(const d of comboDefs)buildCombo(d);
     const reserved=new Set(plans.flatMap(t=>t.petIds.map(lower)));
-    function covers(better,worse){
-      if(better.unknown||worse.unknown||!worse.effects.size)return false;
-      for(const [k,e]of worse.effects){
-        const b=better.effects.get(k);if(!b||!b.known||!e.known)return false;
-        if(Object.entries(e.vector).some(([x,v])=>b.vector[x]===undefined||b.vector[x]+1e-9<v))return false;
+    // Portfolio-wide proof: a surplus pet may have three independently useful
+    // abilities. Each ability must be outperformed by a CURRENTLY RESERVED pet,
+    // but the three replacements need not be the SAME pet. Never compare
+    // arbitrary rarity, species or only a partial set of rolls.
+    function coversPortfolio(pool,worse){
+      if(worse.unknown||!worse.effects.size)return null;
+      const replacements=new Map();
+      for(const [key,effect]of worse.effects){
+        if(!effect.known)return null;
+        const better=pool.find(p=>p.id!==worse.id&&!p.unknown&&(()=>{
+          const e=p.effects.get(key);
+          return !!e?.known&&Object.entries(effect.vector).every(([name,value])=>
+            e.vector[name]!==undefined&&e.vector[name]+1e-9>=value);
+        })());
+        if(!better)return null;
+        replacements.set(lower(better.id),better);
       }
-      return true;
+      return [...replacements.values()];
     }
     const retained=owned.filter(p=>reserved.has(lower(p.id)));
     const decisions=owned.map(p=>{
       if(reserved.has(lower(p.id)))return {id:p.id,kind:'keep',reason:'Für ein Effekt- oder AFK-Team reserviert.'};
       if(p.unknown)return {id:p.id,kind:'unknown',reason:'Max-STR oder einzelne Fähigkeiten fehlen bzw. sind nicht sicher vergleichbar.'};
-      const replacement=retained.find(q=>q.id!==p.id&&covers(q,p));
-      return replacement?{id:p.id,kind:'surplus',replacement:replacement.id,reason:'Bei Max-STR vollständig durch '+(replacement.name||replacement.petSpecies)+' abgedeckt.'}:
-        {id:p.id,kind:'keep',reason:'Keine vollständige bessere Abdeckung dieser Fähigkeiten vorhanden.'};
+      const better=coversPortfolio(retained,p);
+      if(!better?.length)return {id:p.id,kind:'keep',reason:'Nicht alle Fähigkeiten werden von reservierten Team-Pets abgedeckt.'};
+      const names=better.map(x=>x.name||x.petSpecies);
+      return {id:p.id,kind:'surplus',replacement:better[0].id,replacements:better.map(x=>x.id),
+        reason:'Alle Max-STR-Boosts durch '+(better.length>1?better.length+' Team-Pets':names[0])+' abgedeckt.'};
     });
     return {ready:!!catalogs.pets&&!!catalogs.abilities,plans,decisions,unknown,reserved:[...reserved],
       owned:owned.map(({effects,...p})=>p),message:!catalogs.pets?'Pet-Katalog fehlt':!catalogs.abilities?'Fähigkeitenkatalog fehlt':
@@ -1174,7 +1187,12 @@ function createV16Controller(env) {
       if(!why&&!c.petSellEggs.includes(p.sourceEggId))why='Ei-Gruppe nicht freigegeben';
       const d=plan.decisions.find(d=>lc(d.id)===lc(p.id));
       if(!why&&d?.kind!=='surplus')why=d?.reason||'Boostvergleich unklar';
-      if(!why&&(!plan.reserved.includes(lc(d.replacement))||!plan.owned.some(x=>lc(x.id)===lc(d.replacement))))why='Besseres Ersatz-Pet nicht mehr reserviert';
+      if(!why){
+        const backups=arr(d?.replacements).length?d.replacements:[d?.replacement];
+        if(!backups.length||backups.some(id=>!id||!plan.reserved.includes(lc(id))||
+          !plan.owned.some(x=>lc(x.id)===lc(id))))
+          why='Mindestens ein Ersatz-Pet gehört nicht mehr zum aktuellen Team-Bestand';
+      }
       const row={id:p.id,name:p.name||p.petSpecies||'Pet',eligible:!why,reason:why||d.reason};rows.push(row);
       if(!why&&!selected)selected=p;
     }
@@ -1251,7 +1269,7 @@ function createV16Controller(env) {
 function createAutomationCore(env) {
   'use strict';
   const clone=value=>typeof structuredClone==='function'?structuredClone(value):JSON.parse(JSON.stringify(value));
-  const KEY='magic_garden_automation_v15', LEDGER='magic_garden_purchase_budget_v15', RECEIPTS='magic_garden_action_receipts_v15';
+  const KEY='magic_garden_automation_v15', LEDGER='magic_garden_purchase_budget_v15', RECEIPTS='magic_garden_action_receipts_v15', AUTO_MARKS='magic_garden_own_crop_favorites_v16';
   const names={favorite:'Wertschutz / Favoriten',journal:'Journal',feed:'Pets füttern',trough:'Futtertrog',claims:'Quest-Belohnungen',hatch:'Eier ausbrüten',plant:'Nachpflanzen',eggs:'Eier nachlegen',water:'Gießen',storage:'Lager',teams:'Wetter-Petteams',buy:'Shop-Einkauf',petSell:'Pet Auto-Sell',ariesSync:'Aries-Teams aktualisieren'};
   const defaults={enabled:false,harvest:true,cropSell:true,favorite:false,journal:false,feed:false,trough:false,claims:false,hatch:false,plant:false,eggs:false,water:false,storage:false,teams:false,buy:false,petSell:false,ariesSync:false,petSellEggs:[],petSellPerSession:0,teamBuilder:false,autoTeams:false,hatchTeamKey:'',sellTeamKey:'',petSellTeamKey:'',idleTeamKey:'',ariesManagedTeams:[],seedSpecies:'',eggPlaceMode:'all',eggPlaceAllowed:[],eggHatchMode:'all',eggHatchAllowed:[],hungerPercent:30,foodMaxValue:1000,troughItems:5,toolReserve:2,waterMinSeconds:600,keepValue:0,keepSpecies:[],minHarvestSize:0,minHarvestValue:0,wantedMutations:[],pauseWeather:[],buyRules:[],teamRules:[],actionIntervalMs:900};
   const arr=v=>Array.isArray(v)?v:[],num=v=>typeof v==='number'&&Number.isFinite(v),str=v=>typeof v==='string'&&v.length>0&&v.length<120,obj=v=>v&&typeof v==='object'&&!Array.isArray(v);
@@ -1348,16 +1366,84 @@ function createAutomationCore(env) {
   }
   function produceValue(i){const crop=catalogs.plants?.[i?.species]?.crop;if(!crop||!num(crop.baseSellPrice)||!num(crop.maxSizeMultiplier)||!num(i.size)||!Array.isArray(i.mutations))return null;let growth=1,additive=1,seenGrowth=false;for(const id of new Set(i.mutations)){const m=catalogs.mutations?.[id];if(!m||!num(m.coinMultiplier))return null;if(m.group==='Growth'){if(seenGrowth)return null;growth=m.coinMultiplier;seenGrowth=true;}else additive+=m.coinMultiplier-1;}const size=1+(crop.maxSizeMultiplier-1)*(Math.min(100,Math.max(50,i.size))-50)/50;return Math.round(crop.baseSellPrice*size*growth*additive);}
   function nativeFavorite(s,i){return s.inventory.favoritedItemIds.includes(itemKey(i));}
-  function keepItem(s,i){if(nativeFavorite(s,i)||env.protected({},i))return true;if(config.keepSpecies.includes(i.species))return true;if(config.keepValue>0){const v=produceValue(i);return v===null||v>=config.keepValue;}return false;}
+  // Policy and native favorites are deliberately separate: game favorites are
+  // persistent, while keep rules can change without a reload. Never infer that
+  // a pre-existing native favorite was created by this AutoFarm.
+  function ruleKeep(i){
+    if(config.keepSpecies.includes(i.species))return true;
+    if(config.keepValue>0){const v=produceValue(i);return v===null||v>=config.keepValue;}
+    return false;
+  }
+  function keepItem(s,i){return nativeFavorite(s,i)||env.protected({},i)||ruleKeep(i);}
+  const markOwner=s=>String(s?.ownerKey||s?.actor||'');
+  const markKey=(s,i)=>markOwner(s)+'|'+i.id;
+  function marks(){const value=read(AUTO_MARKS,{});return obj(value)?value:{};}
+  function updateMark(s,i,stage){
+    const ledger=marks(),key=markKey(s,i);
+    if(!str(key)||(!Object.hasOwn(ledger,key)&&Object.keys(ledger).length>=600))return false;
+    if(stage===null)delete ledger[key];else ledger[key]={state:stage};
+    return write(AUTO_MARKS,ledger);
+  }
+  function managed(s){
+    const ledger=marks(),owner=markOwner(s)+'|';
+    const present=new Map(s.inventory.items.filter(i=>i?.itemType==='Produce'&&str(i.id)).map(i=>[markKey(s,i),i]));
+    let changed=false;
+    for(const [key,entry] of Object.entries(ledger)){
+      if(!key.startsWith(owner))continue;
+      const item=present.get(key);
+      if(!item||!obj(entry)){delete ledger[key];changed=true;continue;}
+      const favored=nativeFavorite(s,item);
+      if(entry.state==='pendingAck'&&favored){
+        entry.state='owned';changed=true;
+        receipts.delete(s.actor+'|favorite:clear:'+item.id);
+      }else if((entry.state==='owned'||entry.state==='clearing')&&!favored){
+        delete ledger[key];changed=true;
+        receipts.delete(s.actor+'|favorite:set:'+item.id);
+      }
+    }
+    // Treat storage failures as a safety failure: no release without proof.
+    if(changed&&(!write(AUTO_MARKS,ledger)||!persistReceipts()))return {};
+    return ledger;
+  }
+  function needsFavoriteCleanup(s){
+    if(!config.cropSell)return false;
+    const ledger=managed(s);
+    return s.inventory.items.some(i=>i?.itemType==='Produce'&&str(i.id)&&
+      ledger[markKey(s,i)]?.state==='owned'&&nativeFavorite(s,i)&&
+      !ruleKeep(i)&&!env.protected({},i));
+  }
   function ordinaryFood(s,i){const v=produceValue(i);return i?.itemType==='Produce'&&str(i.id)&&Array.isArray(i.mutations)&&!i.mutations.length&&!keepItem(s,i)&&v!==null&&v>0&&v<=config.foodMaxValue;}
   function sortedFood(s){return s.inventory.items.filter(i=>ordinaryFood(s,i)).sort((a,b)=>produceValue(a)-produceValue(b));}
   function weather(s){return typeof s.game.weather==='string'?s.game.weather:s.game.weatherWindow?.weatherId||'Normal';}
   function harvestAllowed(plant,crop){if(!config.enabled)return true;const s=snapshot();if(!s)return false;if(config.pauseWeather.includes(weather(s)))return false;if(config.journal&&total(s,'Tool','Camera')>0&&journalNeed(s,{...crop,species:crop.species||plant.species},'produce'))return false;if(config.minHarvestSize>0&&(!num(crop.size)||crop.size<config.minHarvestSize))return false;if(config.wantedMutations.length&&!arr(crop.mutations).some(m=>config.wantedMutations.includes(m)))return false;if(config.minHarvestValue>0){const v=produceValue({...crop,species:crop.species||plant.species});if(v===null||v<config.minHarvestValue)return false;}return true;}
   function journalNeed(s,i,category){const species=category==='pets'?i.petSpecies:i.species,record=s.own.journal?.[category];if(!obj(record)||!str(species)||!Array.isArray(i.mutations))return false;const variants=i.mutations.length?i.mutations.filter(m=>catalogs.mutations?.[m]):['Normal'];if(category==='produce'&&i.size===100)variants.push('Max Weight');const logged=arr(record[species]?.variantsLogged).map(v=>v.variant);return variants.some(v=>!logged.includes(v));}
-  function saleAllowed(){if(!config.cropSell)return false;if(!config.enabled)return true;const s=snapshot();if(!s)return false;const produce=s.inventory.items.filter(i=>i?.itemType==='Produce'&&!nativeFavorite(s,i));if(produce.some(i=>keepItem(s,i))){reasons.sell='Warte auf Wertschutz: Auto-Favoriten einschalten oder Regeln anpassen';return false;}if(config.journal&&total(s,'Tool','Camera')>0&&produce.some(i=>journalNeed(s,i,'produce'))){reasons.sell='Warte auf Journal-Eintrag';return false;}if(config.feed){const food=sortedFood(s),hungry=arr(s.own.petSlots).some(p=>{const c=catalogs.pets?.[p?.petSpecies],max=c?.coinsToFullyReplenishHunger??c?.maxHunger;return num(max)&&num(p?.hunger)&&p.hunger/max*100<config.hungerPercent&&food.some(i=>arr(c.diet).includes(i.species));});if(hungry){reasons.sell='Füttern hat Vorrang';return false;}}reasons.sell='Bereit';return true;}
+  function saleAllowed(){if(!config.cropSell)return false;if(!config.enabled)return true;const s=snapshot();if(!s)return false;if(needsFavoriteCleanup(s)){reasons.sell='Alte automatische Favoriten werden nach Regelwechsel freigegeben';return false;}const produce=s.inventory.items.filter(i=>i?.itemType==='Produce'&&!nativeFavorite(s,i));if(produce.some(i=>keepItem(s,i))){reasons.sell='Warte auf Wertschutz: Auto-Favoriten einschalten oder Regeln anpassen';return false;}if(config.journal&&total(s,'Tool','Camera')>0&&produce.some(i=>journalNeed(s,i,'produce'))){reasons.sell='Warte auf Journal-Eintrag';return false;}if(config.feed){const food=sortedFood(s),hungry=arr(s.own.petSlots).some(p=>{const c=catalogs.pets?.[p?.petSpecies],max=c?.coinsToFullyReplenishHunger??c?.maxHunger;return num(max)&&num(p?.hunger)&&p.hunger/max*100<config.hungerPercent&&food.some(i=>arr(c.diet).includes(i.species));});if(hungry){reasons.sell='Füttern hat Vorrang';return false;}}reasons.sell='Bereit';return true;}
   function allowed(key,fp){const r=receipts.get(key);if(!r||r.until<=now())return true;if(r.status==='pending'||r.status==='uncertain')return false;return r.fp!==fp&&now()>=r.after;}
   function job(module,key,fp,command,effect,cooldown=1500){const s=snapshot(),scoped=(s?.actor||'')+'|'+key;if(!allowed(scoped,fp)){reasons[module]='Warte auf Bestätigung / Änderung';return null;}return {module,key:scoped,fp,command,effect,cooldown};}
-  function planFavorite(s){for(const i of s.inventory.items)if(i?.itemType==='Produce'&&str(i.id)&&!nativeFavorite(s,i)&&keepItem(s,i))return job('favorite','favorite:'+i.id,'unstarred',{type:'ToggleLockItem',itemId:i.id},n=>n.inventory.favoritedItemIds.includes(i.id),600000);return null;}
+  function planFavorite(s){
+    const ledger=managed(s);
+    // Remove ONLY the marks that this AutoFarm provably created. This check
+    // examines the entire CURRENT bag on every planner tick, not just items
+    // harvested since protection was turned on. A manual favorite is never
+    // claimed or switched off.
+    if(config.cropSell)for(const i of s.inventory.items){
+      if(i?.itemType!=='Produce'||!str(i.id)||!nativeFavorite(s,i))continue;
+      if(ledger[markKey(s,i)]?.state!=='owned'||ruleKeep(i)||env.protected({},i))continue;
+      const j=job('favorite','favorite:clear:'+i.id,'favorited',
+        {type:'ToggleLockItem',itemId:i.id},n=>!n.inventory.favoritedItemIds.includes(i.id),600000);
+      if(j){j.favoriteOp='clear';j.favoriteId=i.id;}return j;
+    }
+    if(!config.favorite)return null;
+    for(const i of s.inventory.items){
+      if(i?.itemType!=='Produce'||!str(i.id)||nativeFavorite(s,i)||!ruleKeep(i))continue;
+      // Do not create new locks for a crop that is independently protected.
+      if(env.protected({},i))continue;
+      const j=job('favorite','favorite:set:'+i.id,'unstarred',
+        {type:'ToggleLockItem',itemId:i.id},n=>n.inventory.favoritedItemIds.includes(i.id),600000);
+      if(j){j.favoriteOp='set';j.favoriteId=i.id;}return j;
+    }
+    return null;
+  }
   function planJournal(s){
     if(total(s,'Tool','Camera')<1){reasons.journal='Camera im Inventar fehlt';return null;}const record=JSON.stringify(s.own.journal||{});
     for(const i of s.inventory.items){const category=i?.itemType==='Produce'?'produce':i?.itemType==='Pet'?'pets':null;if(category&&str(i.id)&&journalNeed(s,i,category))return job('journal','journal:item:'+i.id,record,{type:'LogItem',target:{kind:'inventoryItem',itemId:i.id}},n=>!journalNeed(n,i,category),5000);}
@@ -1462,7 +1548,13 @@ function createAutomationCore(env) {
     }return null;
   }
   const planners={favorite:planFavorite,journal:planJournal,feed:planFeed,trough:planTrough,claims:planClaims,hatch:planHatch,plant:planPlant,eggs:planEggs,water:planWater,storage:planStorage,teams:planTeams,buy:planBuy,petSell:planPetSell,ariesSync:planAriesSync};
-  function candidates(s){const output=[];for(const [module,plan]of Object.entries(planners)){if(!config[module]){reasons[module]='Aus';continue;}reasons[module]='Nichts zu tun';try{const j=plan(s);if(j){reasons[module]='Bereit';output.push(j);}}catch{reasons[module]='Unerwartete Spieldaten – ausgelassen';}}return output;}
+  function candidates(s){const output=[];for(const [module,plan]of Object.entries(planners)){
+    // Releasing stale AUTO favorites is housekeeping for Crop Auto-Sell even
+    // when new automatic favorite creation was switched off.
+    if(!config[module]&&!(module==='favorite'&&needsFavoriteCleanup(s))){reasons[module]='Aus';continue;}
+    reasons[module]='Nichts zu tun';try{const j=plan(s);if(j){reasons[module]='Bereit';output.push(j);}}
+    catch{reasons[module]='Unerwartete Spieldaten – ausgelassen';}
+  }return output;}
   function selectedJob(s){const all=candidates(s),urgent=all.find(j=>['favorite','claims','feed'].includes(j.module));const priority={plantSeeds:'plant',growEggs:'eggs',hatchEggs:'hatch',waterPlants:'water',feedPets:'feed',logJournal:'journal',buySeeds:'buy',buyEggs:'buy',buyDecor:'buy'};const goals=arr(s.own.dailyQuests?.quests).filter(q=>q?.claimedAt===null&&q?.completedAt===null).map(q=>priority[q.objective?.kind]).filter(Boolean);const questAction=all.find(j=>goals.includes(j.module)&&j.module!==lastModule);return urgent||questAction||all.find(j=>j.module!==lastModule)||all[0]||null;}
   async function execute(candidate,s){
     if(!env.running()||!config.enabled)return false;
@@ -1472,19 +1564,44 @@ function createAutomationCore(env) {
     receipts.set(latest.key,record);
     if(!persistReceipts()){receipts.delete(latest.key);reasons[latest.module]='Speicher voll – Aktion gesperrt';return false;}
     if(latest.purchase){const b=ledger(fresh);if(!b)return false;const p=latest.purchase;if(b.key!==p.key||b.data.inflight||fresh.own.coinsCount<p.price)return false;b.data.spent+=p.price;b.data.counts[p.token]=(b.data.counts[p.token]||0)+1;b.data.inflight={shop:p.shop,restockId:p.restockId,id:p.id,beforeCount:p.beforeCount,coinsBefore:fresh.own.coinsCount,price:p.price};if(!write(b.key,b.data)){reasons.buy='Kaufstatus nicht speicherbar – Kauf pausiert';return false;}}
+    // Store intent before sending a toggle. A timeout must never turn into an
+    // untracked mark we later unlock without proof of a successful response.
+    if(latest.favoriteOp==='set'&&!updateMark(fresh,{id:latest.favoriteId},'sent')){
+      receipts.delete(latest.key);persistReceipts();reasons.favorite='Favoritenprotokoll nicht speicherbar';return false;
+    }
+    if(latest.favoriteOp==='clear'&&!updateMark(fresh,{id:latest.favoriteId},'clearing')){
+      receipts.delete(latest.key);persistReceipts();reasons.favorite='Freigabeprotokoll nicht speicherbar';return false;
+    }
     lastActionAt=now();lastModule=latest.module;
-    try{const response=latest.module==='ariesSync'
+    try{const response=latest.module==='ariesSync' 
       ? await env.updateAriesTeam?.(latest.ariesPlan)
       : await v16.send(latest.command,{validate:n=>{
-        if(!config[latest.module])return false;
+        if(!config[latest.module]&&!(latest.module==='favorite'&&latest.favoriteOp==='clear'&&config.cropSell))return false;
         if(!['HatchEgg','SellPet'].includes(latest.command.type))return true;
         const held=receipts.get(latest.key);receipts.delete(latest.key);
         try{const check=planners[latest.module](n);return !!check&&check.key===latest.key;}
         finally{if(held)receipts.set(latest.key,held);}
       }});
       if(response?.ok!==true)throw new Error('Aktion nicht bestätigt');
-      counts[latest.module]++;record.status='confirmed';record.until=latest.module==='favorite'?Number.MAX_SAFE_INTEGER:now()+600000;event(latest.module,'Bestätigt');reasons[latest.module]='Bestätigt; warte auf Zustandsänderung';if(latest.module==='favorite')record.after=now()+600000;if(latest.effect&&latest.module!=='favorite'){const updated=snapshot();if(updated&&latest.effect(updated))record.until=Math.max(record.after,now()+500);}}
+      counts[latest.module]++;record.status='confirmed';record.until=latest.module==='favorite'?Number.MAX_SAFE_INTEGER:now()+600000;event(latest.module,'Bestätigt');reasons[latest.module]='Bestätigt; warte auf Zustandsänderung';if(latest.module==='favorite'){
+        record.after=now()+600000;
+        if(latest.favoriteOp==='set'){
+          // Server acknowledged the toggle. Only this mark can later be
+          // unstarred by rule changes; unrelated manual favorites stay put.
+          const updated=snapshot();const live=updated?.inventory?.favoritedItemIds?.includes(latest.favoriteId);
+          updateMark(fresh,{id:latest.favoriteId},live?'owned':'pendingAck');
+          if(live)receipts.delete(fresh.actor+'|favorite:clear:'+latest.favoriteId);
+        }
+        if(latest.favoriteOp==='clear'){
+          const updated=snapshot();if(updated&&!updated.inventory.favoritedItemIds.includes(latest.favoriteId)){
+            updateMark(fresh,{id:latest.favoriteId},null);
+            receipts.delete(fresh.actor+'|favorite:set:'+latest.favoriteId);
+          }
+        }
+      }
+      if(latest.effect&&latest.module!=='favorite'){const updated=snapshot();if(updated&&latest.effect(updated))record.until=Math.max(record.after,now()+500);}}
     catch(error){
+      if(latest.favoriteOp==='set')updateMark(fresh,{id:latest.favoriteId},'uncertain');
       record.status='uncertain';record.until=latest.module==='favorite'?Number.MAX_SAFE_INTEGER:now()+600000;
       reasons[latest.module]=String(error?.message||'Aktion nicht bestätigt').slice(0,150);
       event(latest.module,reasons[latest.module]);
@@ -1631,7 +1748,7 @@ function createChoiceControls(doc, save, getConfig) {
 function mountAutomationUI(parent, engine, document) {
   const root=document.createElement('section'); root.id='mg15-automation'; root.className='mg-auto-intro';
   root.style.cssText='border-top:1px solid #355342;margin-top:12px;padding-top:10px';
-  const summary=document.createElement('h3');summary.textContent='Automationen · V16.1';
+  const summary=document.createElement('h3');summary.textContent='Automationen · V16.2';
   summary.style.cssText='font-weight:bold;cursor:pointer';root.appendChild(summary);
   const note=document.createElement('p');note.textContent='Neue Aktionen sind zunächst aus. Module einzeln freigeben. Käufe benötigen nur deine Kaufregeln und genügend Coins. Keine Credits, Trades oder Pet-Verkäufe.';
   note.className='mg-choice-note';note.textContent='Jede Funktion bleibt separat schaltbar. Favoriten, Mutationen, gesperrte Gegenstände und benötigte Team-Pets sind geschützt. Testbuild: kein Live-Test auf deinem Konto.';
@@ -1646,7 +1763,9 @@ function mountAutomationUI(parent, engine, document) {
   pickers.installStyles(root);
   const dependent=[];
   const HELP={
-    'Pet Auto-Sell einschalten':'Verkauft nur freigegebene Ei-Gruppen, wenn alle Boosts bei Max-STR besser abgedeckt sind. Favoriten, Team-Pets, Mutationen und Sperren bleiben geschützt. Kein pauschales Journal- oder Fünf-Pets-Limit.',
+    'Pet Auto-Sell einschalten':'Prüft ALLE eigenen Pets in Inventar, aktiven Slots und Pet Hutch gegen sämtliche benötigten Teams. Erst wenn alle Max-STR-Fähigkeiten durch reservierte bessere Pets abgedeckt sind und das Herkunftsei erlaubt ist, wird das Pet verkauft. Favoriten, Mutationen und manuelle Teams sind geschützt.',
+    'Wertvolle Produkte favorisieren':'Alte vom Bot gesetzte Favoriten werden nach einer geänderten Schutzregel automatisch freigegeben. Von dir manuell favorisierte Crops bleiben geschützt. Änderungen wirken ohne F5.',
+    'Pflanzen verkaufen':'Berücksichtigt auch alte Crops nach einer Regeländerung. Vom Bot selbst gesetzte alte Favoriten werden nur bei überprüfbarer Herkunft wieder freigegeben. Manuelle Favoriten bleiben geschützt.',
     'Effekt-Teams automatisch speichern':'Speichert Einzelteams sowie Kombis pro Aktion (z. B. Max-STR + Hatch-XP + Double Hatch). Ein Pet mit mehreren Boosts hilft jedem dieser Ziele. AFK-Varianten berücksichtigen Hunger-Unterstützung. Änderungen behalten dieselbe Team-ID.',
     'Passendes Team vor Aktionen einsetzen':'Wechselt erst nach bestätigter Speicherung. Die Aktion wartet auf die echten Teammitglieder; danach Rückkehr zum vorherigen Team.',
     'Leere grüne Felder bepflanzen':'Nur grüne, leere Plätze und vorhandenes ausgewähltes Saatgut. Kauft selbst nichts.',
@@ -1708,7 +1827,7 @@ function mountAutomationUI(parent, engine, document) {
   check('Wertvolle Produkte favorisieren','favorite',protection);number('Favorisieren ab Basiswert (0 = aus)','keepValue',0,1e12,protection);
   list('Diese Pflanzenarten behalten','keepSpecies',protection);number('Ernten ab Größe (0 = alle)','minHarvestSize',0,100,protection);
   number('Ernten ab Basiswert (0 = alle)','minHarvestValue',0,1e12,protection);list('Nur diese Mutationen ernten','wantedMutations',protection);list('Bei diesem Wetter Ernte pausieren','pauseWeather',protection);
-  const hints=document.createElement('small');hints.textContent='Native Sperren und der vorhandene Mutations-/Max-Größen-Schutz haben immer Vorrang. Favoriten werden nie automatisch entsperrt. Basiswert ist ohne Verkaufs-/Freundesbonus.';protection.appendChild(hints);
+  explain('Aktuelle Regeln gelten sofort auch für bereits geerntete Crops. Ausschließlich nachweislich vom Bot gesetzte Favoriten werden bei Regeländerung freigegeben. Manuell favorisierte oder anderweitig gesperrte Ernten bleiben geschützt. Der Basiswert enthält keine Verkaufs- oder Freundesboni.',protection);
   const pets=section('Pets, Futter & Lager');check('Aktive Pets automatisch füttern','feed',pets);number('Füttern unter Hungerfüllstand (%)','hungerPercent',1,90,pets);number('Maximaler Futter-Basiswert','foodMaxValue',1,1e9,pets);
 
   check('Futtertrog nachfüllen','trough',pets);number('Ziel: Futter im Trog','troughItems',0,50,pets);check('Bestehende Lagerstapel auffüllen','storage',pets);
@@ -2405,7 +2524,7 @@ function mountFieldGrid(container, plan, onChange) {
   }
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-  const VERSION = "16.1.0";
+  const VERSION = "16.2.0";
   const UPDATE_URL = "https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js";
   const NUMBER_FIELDS = Object.freeze({
     sellThreshold: { min: 5, max: 200, step: 1 },
@@ -2462,6 +2581,7 @@ function mountFieldGrid(container, plan, onChange) {
     lastRejection: "",
     lastError: "",
     cooldowns: new Map(),
+    protectedCooldownKeys: new Set(),
     currentDelay: cfg.adaptive.initialMs,
     lastResponseMs: 0,
     averageResponseMs: 0,
@@ -2806,9 +2926,19 @@ function mountFieldGrid(container, plan, onChange) {
         if (!Number.isInteger(crop?.slotId)) continue;
         if (!Number.isFinite(crop?.endTime) || crop.endTime > serverNow()) continue;
         const key = `${tile}:${crop.slotId}`;
+        // Protection cooldowns are NOT permanent decisions. Re-check the
+        // currently selected mutation/size/field protection rule on every
+        // scan; otherwise a once-Gold crop remains hidden for 30 minutes even
+        // after the player explicitly disables that protection.
+        if (state.protectedCooldownKeys.has(key)) {
+          if (isMarkedProtected(plant, crop)) continue;
+          state.protectedCooldownKeys.delete(key);
+          state.cooldowns.delete(key);
+        }
         if ((state.cooldowns.get(key) || 0) > now) continue;
         if (isMarkedProtected(plant, crop)) {
           state.cooldowns.set(key, now + cfg.protectedSlotCooldownMs);
+          state.protectedCooldownKeys.add(key);
           state.protectedSkips++;
           continue;
         }
@@ -3243,7 +3373,10 @@ function mountFieldGrid(container, plan, onChange) {
 
     // Nur ABGELAUFENE Cooldowns bereinigen. Pflanzenschutz bleibt intakt.
     for (const [key, until] of state.cooldowns) {
-      if (until <= now) state.cooldowns.delete(key);
+      if (until <= now) {
+        state.cooldowns.delete(key);
+        state.protectedCooldownKeys.delete(key);
+      }
     }
     state.successStreak = 0;
     state.currentDelay = Math.min(prefs.maxHarvestDelayMs,
@@ -3862,5 +3995,5 @@ function mountFieldGrid(container, plan, onChange) {
   if (!firstV16 && readValue(sessionStorage, KEYS.resume) === "1") {
     start({ auto: true });
   }
-  console.log("✅ Magic Garden AutoFarm V16.1.0 geladen (Automationszentrale, ohne Fremdskripte).");
+  console.log("✅ Magic Garden AutoFarm V16.2.0 geladen (Automationszentrale, ohne Fremdskripte).");
 })();

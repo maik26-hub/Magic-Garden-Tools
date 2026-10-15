@@ -4,9 +4,9 @@ const root=path.resolve(__dirname,'..');
 let src=fs.readFileSync(path.join(root,'src/core-v14.user.js'),'utf8');
 function replace(a,b,name){const parts=src.split(a);if(parts.length!==2)throw Error(`${name}: expected one anchor, got ${parts.length-1}`);src=parts[0]+b+parts[1];}
 function stripExports(file){return fs.readFileSync(path.join(root,'src',file),'utf8').replace(/^if \(typeof module[^\n]*$/m,'');}
-replace('// @version      14.0.3','// @version      16.1.0','metadata version');
-replace('const VERSION = "14.0.3"','const VERSION = "16.1.0"','runtime version');
-replace('// @description  V14.0.3: standalone auto-farm, direct V13 update, AFK watchdog and safe reconnect/reload recovery','// @description  V16.1.0: action-combo hatch/sell teams, AFK synergies and persisted effect teams','description');
+replace('// @version      14.0.3','// @version      16.2.0','metadata version');
+replace('const VERSION = "14.0.3"','const VERSION = "16.2.0"','runtime version');
+replace('// @description  V14.0.3: standalone auto-farm, direct V13 update, AFK watchdog and safe reconnect/reload recovery','// @description  V16.2.0: live crop-rule rechecks and full-inventory pet boost coverage','description');
 replace('  "use strict";', '  "use strict";\n\n'+stripExports('catalog-source.js')+'\n'+stripExports('pet-advisor.js')+'\n'+stripExports('pet-automation.js')+'\n'+stripExports('effect-teams.js')+'\n'+stripExports('team-registry.js')+'\n'+stripExports('team-actions.js')+'\n'+stripExports('v16-controller.js')+'\n'+stripExports('automation-core.js')+'\n'+stripExports('choice-controls.js')+'\n'+stripExports('automation-ui.js')+'\n  let automation = null;\n  let automationUI = null;','inline modules');
 replace('    sequence: -1, frontier: -1, lastSnapshotAt: 0, observedSockets: 0',`    sequence: -1, frontier: -1, lastSnapshotAt: 0, observedSockets: 0,
     own: null, game: null, actor: null, heldId: '', generation: 0,
@@ -157,11 +157,11 @@ replace('  // ===== Konsole =====',`  // ===== Own-game catalogs: observe early,
   // ===== Konsole =====`,'init engine');
 replace('    state, cfg, prefs, start, stop, resetTimer, resetSession, selectedSlots, getDiagnostics, checkForUpdate, setNumberPreference,','    state, cfg, prefs, start, stop, resetTimer, resetSession, selectedSlots, getDiagnostics, checkForUpdate, setNumberPreference, automation,','public API');
 replace('      runtimeSeconds: Math.floor(runtimeMs() / 1000)','      runtimeSeconds: Math.floor(runtimeMs() / 1000),\n      automation: automation?.status() || null','diag');
-replace('console.log("✅ Magic Garden AutoFarm V14.0.3 geladen (keine QPM-/Companion-Abhaengigkeit).");','console.log("✅ Magic Garden AutoFarm V16.1.0 geladen (Automationszentrale, ohne Fremdskripte).");','boot');
+replace('console.log("✅ Magic Garden AutoFarm V14.0.3 geladen (keine QPM-/Companion-Abhaengigkeit).");','console.log("✅ Magic Garden AutoFarm V16.2.0 geladen (Automationszentrale, ohne Fremdskripte).");','boot');
 src = require('./compact-menu.cjs')(src, stripExports('compact-menu.js'));
 src = require('./field-plan.cjs')(src, stripExports('field-plan.js'));
 src = require('./header-updater.cjs')(src, stripExports('update-fetch.js'));
 src = require('./v16.cjs')(src, stripExports('info-tooltips.js')); 
 new vm.Script(src,{filename:'MagicGardenAutoFarm.user.js'});
 fs.writeFileSync(path.join(root,'MagicGardenAutoFarm.user.js'),src);
-console.log('Built V16.1.0:',Buffer.byteLength(src),'bytes');
+console.log('Built V16.2.0:',Buffer.byteLength(src),'bytes');

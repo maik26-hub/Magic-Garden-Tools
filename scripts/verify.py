@@ -102,7 +102,7 @@ for script, file in BROWSERS.items():
                                'report': file})
 
 report = {
-    'version': '16.1.0', 'test_build': True,
+    'version': '16.2.0', 'test_build': True,
     'started_utc': started, 'completed_utc': datetime.now(timezone.utc).isoformat(),
     'published_to_github': False, 'live_game_tested': False,
     'environment': 'Local Node and Chromium offline simulated native game state',
