@@ -237,6 +237,15 @@ function createAutomationCore(env) {
     const proposed=v16.salePreview();
     if(!proposed.pet){reasons.petSell=proposed.why;return null;}
     const pet=proposed.pet;
+    if(proposed.source==='Pet Hutch'){
+      // Never send SellPet against a pet that is still in storage.
+      // The next planning tick rechecks the *entire* portfolio after the
+      // server has confirmed this precise Pet moved into the bag.
+      return job('petSell','retrievepet:'+pet.id,pet.id+':'+pet.targetScale,
+        {type:'MoveItem',from:'PetHutch',to:'inventory',itemId:pet.id,quantity:1},
+        n=>arr(n.inventory?.items).some(i=>i?.id===pet.id&&i.itemType==='Pet')&&
+          !arr(n.inventory?.storages).some(st=>st?.decorId==='PetHutch'&&arr(st.items).some(i=>i?.id===pet.id)),600000);
+    }
     return job('petSell','sellpet:'+pet.id,pet.id+':'+pet.targetScale,
       {type:'SellPet',itemId:pet.id},n=>!arr(n.inventory?.items).some(i=>i?.id===pet.id),600000);
   }
@@ -311,7 +320,8 @@ function createAutomationCore(env) {
       ? await env.updateAriesTeam?.(latest.ariesPlan)
       : await v16.send(latest.command,{validate:n=>{
         if(!config[latest.module]&&!(latest.module==='favorite'&&latest.favoriteOp==='clear'&&config.cropSell))return false;
-        if(!['HatchEgg','SellPet'].includes(latest.command.type))return true;
+        if(!['HatchEgg','SellPet'].includes(latest.command.type)&&
+           !(latest.command.type==='MoveItem'&&latest.command.from==='PetHutch'))return true;
         const held=receipts.get(latest.key);receipts.delete(latest.key);
         try{const check=planners[latest.module](n);return !!check&&check.key===latest.key;}
         finally{if(held)receipts.set(latest.key,held);}

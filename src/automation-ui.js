@@ -1,7 +1,7 @@
 function mountAutomationUI(parent, engine, document) {
   const root=document.createElement('section'); root.id='mg15-automation'; root.className='mg-auto-intro';
   root.style.cssText='border-top:1px solid #355342;margin-top:12px;padding-top:10px';
-  const summary=document.createElement('h3');summary.textContent='Automationen · V16.2';
+  const summary=document.createElement('h3');summary.textContent='Automationen · V16.3';
   summary.style.cssText='font-weight:bold;cursor:pointer';root.appendChild(summary);
   const note=document.createElement('p');note.textContent='Neue Aktionen sind zunächst aus. Module einzeln freigeben. Käufe benötigen nur deine Kaufregeln und genügend Coins. Keine Credits, Trades oder Pet-Verkäufe.';
   note.className='mg-choice-note';note.textContent='Jede Funktion bleibt separat schaltbar. Favoriten, Mutationen, gesperrte Gegenstände und benötigte Team-Pets sind geschützt. Testbuild: kein Live-Test auf deinem Konto.';
@@ -131,7 +131,7 @@ function mountAutomationUI(parent, engine, document) {
     }
   }
 
-  // Opt-in Pet Auto-Sell. Only safely dominated *inventory* pets with a
+  // Opt-in Pet Auto-Sell. Only safely dominated inventory/Hutch pets with a
   // specifically allowed source egg are eligible. Never bulk-sell by rarity.
   const petSellUI=document.createElement('details');petSellUI.className='mg-pet-autosell';petSellUI.open=true;
   const petSellHead=document.createElement('summary');petSellHead.textContent='Pet Auto-Sell · sichere Duplikate';
@@ -141,7 +141,7 @@ function mountAutomationUI(parent, engine, document) {
     'Nur Pets aus diesen Eiern verkaufen','petSellEggs','petSellOriginChoices');
 
   const petSellPreview=live('Wird geladen …',petSellUI);
-  explain('Nur nachweisbar schwächere Pets mit abgedeckten Max-Level-Boosts. Aktive, gesperrte, favorisierte, mutierte, in Teams/Pet Hutch benutzte Pets und unbekannte Ei-Herkunft bleiben geschützt. Leere Eier-Auswahl = kein Verkauf. Keine automatischen Pet-Verkäufe ohne Aktivierung.',petSellUI);
+  explain('Nur nachweisbar schwächere Pets mit abgedeckten Max-Level-Boosts. Aktive, gesperrte, favorisierte, mutierte, in Teams benötigte Pets und unbekannte Ei-Herkunft bleiben geschützt. Leere Eier-Auswahl = kein Verkauf. Keine automatischen Pet-Verkäufe ohne Aktivierung.',petSellUI);
   pets.insertBefore(petSellUI,manager);
 
   // Aries exposes saved teams through QWS_PetsService, but NOT the Team
@@ -175,6 +175,7 @@ function mountAutomationUI(parent, engine, document) {
     petSellPreview.textContent=c.petSell
       ? (proposed?.pet
         ? 'Nächster sicherer Kandidat: '+(proposed.pet.name||proposed.pet.petSpecies)+
+          ' · '+(proposed.source==='Pet Hutch'?'Pet Hutch → Inventar → Verkauf':'Inventar → Verkauf')+
           ' · Herkunft: '+proposed.pet.sourceEggId+
           ' · '+proposed.why
         : 'Verkauf wartet: '+(proposed?.why||'Spieldaten fehlen'))

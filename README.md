@@ -1,12 +1,18 @@
-# Magic Garden AutoFarm – V16.2.0
+# Magic Garden AutoFarm – V16.3.0
 
-## Neu in V16.2.0: Bestehenden Bestand nach aktuellen Regeln behandeln
+## Neu in V16.3.0: Pet Auto-Sell kann auch sichere Überschüsse aus dem Pet Hutch entnehmen
+
+- **Ein einziger Bestand:** Inventar + Pet Hutch + aktives Team werden anhand der tatsächlichen Fähigkeitseffekte und **Max STR** gemeinsam bewertet. Ein stärkeres Pet im Inventar kann ein schwächeres Hutch-Pet überflüssig machen; alle aktuell benötigten Teamplätze bleiben geschützt.
+- **Zwei strikt getrennte Befehle:** Nur nach eindeutiger Freigabe erfolgt `MoveItem` vom `PetHutch` ins Inventar. Erst wenn genau dieses Pet eindeutig aus dem Hutch verschwunden und im Inventar angekommen ist, wird beim nächsten Durchlauf neu geprüft und ggf. `SellPet` ausgeführt.
+- **Sicherheitsmaßnahmen:** Kein Verkauf von Favoriten, mutierten, gesperrten, aktiven oder in einem gespeicherten Team benötigten Pets. Kein Hutch-Transfer bei vollem Inventar oder unklaren Daten. Unbestätigte Aktionen werden nicht blind wiederholt. Native Hutch-Transfers sind im echten Spielkonto noch nicht live validiert.
+
+## Bereits in V16.2: Bestehenden Bestand nach aktuellen Regeln behandeln
 
 - **Crops: Live-Schutz statt F5.** Wenn du den eigenständigen Mutations- oder Größenschutz abschaltest, wird ein früher wegen Schutz übersprungener Grow-Slot beim nächsten Scan erneut geprüft – ohne 30-Minuten-Alt-Cooldown. Native Pflanzensperren bleiben weiterhin geschützt.
 - **Auto-Favoriten nur mit Eigentumsnachweis wieder freigeben.** Die AutoFarm protokolliert ab dieser Version, welche konkreten Crops **sie selbst** favorisiert hat. Nach einer Regeländerung löst sie diese bot-eigenen Favoriten beim nächsten aktiven Verkaufslauf automatisch und berücksichtigt anschließend auch älteren Bestand. Manuelle Favoriten, ausdrücklich gesperrte Pflanzen und unklare Server-Toggles bleiben unangetastet.
 - **Wichtig bei alten Favoriten aus früheren Versionen:** Es gibt keinen zuverlässigen Herkunftsnachweis. Sie werden aus Sicherheitsgründen nicht automatisch entmarkiert. Falls du sie verkaufen möchtest, musst du den alten manuellen/unklaren Favoriten einmal im Spiel entfernen.
 - **Pet Auto-Sell: Vollständiger Portfolio-Vergleich.** Auch wenn ein Pet **drei verschiedene Fähigkeiten** besitzt, darf es erst als surplus markiert werden, wenn **jede** Fähigkeit bei Max STR durch aktuell reservierte Team-Pets mindestens gleich gut abgedeckt wird. Unterschiedliche Ersatz-Pets dürfen unterschiedliche Fähigkeiten abdecken. Fehlende oder unbekannte Daten blockieren den Verkauf.
-- **Aktuelle Regel ist entscheidend, nicht Erhaltszeitpunkt:** Die Prüfung läuft über den gesamten vorhandenen eigenen Bestand inklusive Inventar, aktiver Pets und Pet Hutch. Teamreservierungen und aktueller Herkunftsei-Filter werden vor jedem möglichen Verkauf erneut validiert. Nur freigegebene, im Inventar liegende Pets können verkauft werden; Favoriten, Sperren, Mutationen und Teammitglieder bleiben geschützt. Bereits unsichere native Verkaufsversuche bleiben gegen Doppelverkauf gesperrt.
+- **Aktuelle Regel ist entscheidend, nicht Erhaltszeitpunkt:** Die Prüfung läuft über den gesamten vorhandenen eigenen Bestand inklusive Inventar, aktiver Pets und Pet Hutch. Teamreservierungen und aktueller Herkunftsei-Filter werden vor jedem möglichen Verkauf erneut validiert. Nur freigegebene Inventar-Pets können verkauft werden; sichere Hutch-Überschüsse werden nach bestätigter Entnahme ins Inventar erneut geprüft; Favoriten, Sperren, Mutationen und Teammitglieder bleiben geschützt. Bereits unsichere native Verkaufsversuche bleiben gegen Doppelverkauf gesperrt.
 - Keine neue Pflichtoption und kein Farm-Modus. Erklärungen stehen hinter ⓘ.
 
 ## Neu in V16.1.0: Kombinierte Aktions-Teams
@@ -24,15 +30,15 @@ Die Gewichtung normalisiert Fähigkeiten je Effekt-Familie und benutzt eine abne
 
 
 Lokale, installierbare Testversion auf Basis der V15.4.0 aus
-maik26-hub/Magic-Garden-Tools. **Nicht auf GitHub veröffentlicht.**
+maik26-hub/Magic-Garden-Tools. **Testbuild: Veröffentlichung auf GitHub erst nach erfolgreichen Prüfungen.**
 
 ## Installieren
 
 1. Die bisherige AutoFarm in Tampermonkey sichern (Export oder Codekopie).
 2. Die vorhandene „Magic Garden AutoFarm“ im Tampermonkey-Editor öffnen.
-3. Den kompletten Code durch den Inhalt von `MagicGardenAutoFarm-V16-Test.user.js`
+3. Den kompletten Code durch den Inhalt von `MagicGardenAutoFarm-V16.3.0.user.js`
    ersetzen und speichern. Die gleichnamige TXT enthält exakt denselben Code.
-4. Magic Garden neu laden. Oben muss `v16.2.0` stehen.
+4. Magic Garden neu laden. Oben muss `v16.3.0` stehen.
 5. Nur **eine AutoFarm** aktiv lassen. Andere Farm-Skripte nicht parallel ausführen.
 
 Name und Namespace bleiben gleich. Die bisherigen Feldfarben, gewählten Eier,
@@ -64,9 +70,9 @@ lässt sich separat aus den erzeugten AFK-Vorlagen wählen. Stop unterbricht neu
 Aktionen; eine ausstehende Rückkehr wird beim nächsten Start versucht.
 
 **Pet Auto-Sell.** Ei-Gruppen per Auswahl freigeben und einschalten. Nur Pets
-mit vollständig bekannten, bei Max-STR von einem reservierten Pet abgedeckten
+mit vollständig bekannten, bei Max-STR von den reservierten Team-Pets insgesamt abgedeckten
 Fähigkeiten kommen infrage. Favoriten, Sperren, Mutationen, aktive/gespeicherte
-Team-Pets und gelagerte Pets bleiben geschützt. Fehlende Journal-Einträge und
+Team-Pets und weiterhin benötigte Hutch-Pets bleiben geschützt. Sicher überzählige Hutch-Pets werden zuerst ins Inventar entnommen. Fehlende Journal-Einträge und
 das alte Fünf-Pets-Limit blockieren nicht mehr pauschal. Unbekannte Herkunftseier
 oder unbekannte individuelle Effekte werden nicht geraten. Die Vorschau zeigt
 einen konkreten Grund. Eine reine positive Antwort zählt nicht als Verkauf:
