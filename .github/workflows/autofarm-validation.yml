@@ -1,7 +1,7 @@
 name: AutoFarm validation
 on:
   push:
-    branches: [main, feature/v15-automation-engine]
+    branches: [main]
   pull_request:
     branches: [main]
 permissions:
@@ -28,7 +28,12 @@ jobs:
           node --check src/update-fetch.js
           node --check src/pet-advisor.js
           node --check src/pet-automation.js
-          node --test tests/main-upgrade.test.cjs tests/automation.test.cjs tests/reservations.test.cjs tests/field-roles.test.cjs tests/catalog-source.test.cjs tests/egg-filters.test.cjs tests/updater.test.cjs tests/pet-advisor.test.cjs tests/pet-automation.test.cjs
+          node --check src/effect-teams.js
+          node --check src/team-registry.js
+          node --check src/team-actions.js
+          node --check src/v16-controller.js
+          node --check src/info-tooltips.js
+          node --test tests/main-upgrade.test.cjs tests/automation.test.cjs tests/reservations.test.cjs tests/field-roles.test.cjs tests/catalog-source.test.cjs tests/egg-filters.test.cjs tests/updater.test.cjs tests/pet-advisor.test.cjs tests/pet-automation.test.cjs tests/v16.test.cjs
       - name: Archive validated source and tests
         if: always()
         uses: actions/upload-artifact@v4

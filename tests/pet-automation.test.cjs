@@ -25,11 +25,12 @@ function harness(opts={}){
    storage:storage(),now:()=>t,running:()=>running,
    protected:(_,p)=>!!(p?.locked||p?.isLocked||p?.protected),
    snapshot:()=>s,loadCatalogs:async()=>({}),
+   withPetLock:async fn=>fn(),
    send:async command=>{
      sends.push({...command});
      if(opts.removeOnSell&&command.type==='SellPet')
        s.inventory.items=s.inventory.items.filter(p=>p.id!==command.itemId);
-     if(opts.reject)throw Error('no native SellPet acknowledgement');
+     if(opts.reject&&!opts.removeOnSell)throw Error('Nicht bestätigt: no native SellPet acknowledgement');
      return {ok:true};
    },
    ariesService:()=>service,
@@ -42,7 +43,7 @@ function harness(opts={}){
      return {ok:true};
    }
  });
- Object.assign(e.catalogs(),{pets:{Bee:{maxScale:2,hoursToMature:12,diet:['Carrot'],coinsToFullyReplenishHunger:500}}});
+ Object.assign(e.catalogs(),{abilities:{SellBoostI:{name:'Sell Boost I',trigger:'sellAllCrops',baseProbability:10,baseParameters:{cropSellPriceIncreasePercentage:20}}},pets:{Bee:{maxScale:2,hoursToMature:12,diet:['Carrot'],coinsToFullyReplenishHunger:500}}});
  return {e,s,sends,ariesSaves,enable:patch=>e.configure({enabled:true,...patch}),
    add:(...pets)=>s.inventory.items.push(...pets),
    advance:(ms=2000)=>{t+=ms;s.serverNow=t;},
@@ -119,11 +120,11 @@ test('all protected or unknown roll data fails closed',async()=>{
  assert.equal(await h.e.step(),false);
  assert.deepEqual(h.sends,[]);
 });
-test('per-session pet-sale cap stops further disposal despite eligible fourth and fifth',async()=>{
+test('removed per-session cap permits the second proven surplus, never a reserved pet',async()=>{
  const h=harness({inventory:[...ranked(),pet('extraWeak',1.2)],removeOnSell:true});
  h.enable({petSell:true,petSellEggs:['CommonEgg'],petSellPerSession:1});
  await h.e.step();h.advance();await h.e.step();
- assert.equal(h.sends.length,1);
+ assert.equal(h.sends.length,2);
 });
 test('only explicitly registered saved Aries teams receive a local managed update',async()=>{
  const aries=svc(),h=harness({inventory:ranked(),aries});
@@ -164,13 +165,13 @@ test('Aries service absent does not invent its proposals or create arbitrary tea
  assert.equal(await h.e.step(),false);
  assert.equal(h.ariesSaves.length,0);
 });
-test('config rejects malformed pet origins/Aries team declarations and clamps sale cap',()=>{
+test('config rejects malformed pet origins/Aries team declarations and ignores retired cap',()=>{
  const h=harness({inventory:ranked()});
  const c=h.e.configure({petSellEggs:['CommonEgg','CommonEgg',22],
    petSellPerSession:2000,ariesManagedTeams:[
      {teamId:'my-team',goal:'sellCrops'},{teamId:'fake',goal:'GiveCoins'}
    ]});
  assert.deepEqual(c.petSellEggs,['CommonEgg']);
- assert.equal(c.petSellPerSession,20);
+ assert.equal(c.petSellPerSession,0);
  assert.deepEqual(c.ariesManagedTeams,[{teamId:'my-team',goal:'sellCrops'}]);
 });
