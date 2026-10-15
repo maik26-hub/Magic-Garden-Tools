@@ -14,15 +14,13 @@ Die neuen Pläne haben stabile Schlüssel (`combo:hatch#active`, `combo:cropSale
 Die Gewichtung normalisiert Fähigkeiten je Effekt-Familie und benutzt eine abnehmende Zusatzwirkung weiterer Pets derselben Familie. Es sind **Planungs-Heuristiken** aus den spielseitig geladenen Effektwerten, keine Garantie für Gold-/Hatch-Ergebnisse. Pet-Verkauf bleibt weiter getrennt aktivierbar und vorsichtig.
 
 
-Lokale, installierbare Testversion auf Basis der V15.4.0 aus
-maik26-hub/Magic-Garden-Tools. **Nicht auf GitHub veröffentlicht.**
+Installierbare Version für Tampermonkey. Quellcode und aktuelles Userscript liegen im [GitHub-Repository](https://github.com/maik26-hub/Magic-Garden-Tools). Der erste Lauf einer neuen Version bleibt aus Sicherheitsgründen gestoppt.
 
 ## Installieren
 
 1. Die bisherige AutoFarm in Tampermonkey sichern (Export oder Codekopie).
 2. Die vorhandene „Magic Garden AutoFarm“ im Tampermonkey-Editor öffnen.
-3. Den kompletten Code durch den Inhalt von `MagicGardenAutoFarm-V16-Test.user.js`
-   ersetzen und speichern. Die gleichnamige TXT enthält exakt denselben Code.
+3. Die [V16.1-Userscriptdatei aus `main`](https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js) in Tampermonkey installieren. Alternativ im bestehenden Skript den Editor öffnen und den Inhalt der GitHub-Datei einfügen und speichern.
 4. Magic Garden neu laden. Oben muss `v16.1.0` stehen.
 5. Nur **eine AutoFarm** aktiv lassen. Andere Farm-Skripte nicht parallel ausführen.
 
@@ -81,13 +79,13 @@ Klick außerhalb schließt sie. Kopfzeile und Start/Stop bleiben beim Scrollen
 stehen. Zentraler Pflanzenschutz fasst die bisherigen Pflanzen-Schutzschalter
 zusammen; native Sperren/Favoriten und Team-Pets werden immer respektiert.
 
-## Grenzen dieser Testversion
+## Grenzen und Live-Test
 
 Die Tests verwenden simulierte native Spielzustände – **keinen angemeldeten
 Spielaccount**. Ein bestandener Test belegt daher nicht, dass ein neuer
 Spielbuild jede interne Schnittstelle unverändert anbietet. Vor dem ersten
 unbeaufsichtigten Lauf einen einzelnen Verkaufs- und Wechselvorgang beobachten.
-Es wird nichts auf GitHub gepusht und kein Hintergrund-Deployment ausgeführt.
+Der GitHub-Push und die CI-Validierung ersetzen **keinen** Live-Test mit deinem Spielaccount. Kauf- und Verkaufsfunktionen sind weiterhin optional.
 
 Der Team-Builder ist eigenständig, nach dem besprochenen Prinzip. Er liest
 **nicht** Aries' interne Vorschlagskarten und verspricht keine identischen
@@ -101,15 +99,9 @@ Aries/QPM/Garden Companion; der ältere manuelle Aries-Sync ist nur optional.
 
 ## Nachprüfen und zurückrollen
 
-`delivery-status.json` und `test-report.json` nennen die ausgeführten Tests und
-SHA-256 der konkreten Testdatei. Die Browserberichte und Screenshots befinden
-sich in `test-output/`. Die Logs liegen in `validation-logs/`.
+Die GitHub-Actions-Workflows **AutoFarm validation** und **AutoFarm UI** prüfen den reproduzierbaren Build, die Node-Tests und die Browser-Simulation. Screenshots und Logs sind als Workflow-Artefakte verfügbar.
 
-Zum Zurückrollen den Code aus `backup/MagicGardenAutoFarm-V15.4-Backup.user.js`
-in derselben Tampermonkey-Installation speichern und neu laden. Die V16-Datei
-nicht zusätzlich zur alten AutoFarm aktiv lassen. V16-spezifische lokale
-Teamvorlagen können im Browser verbleiben; vorhandene Spielteams werden beim
-Zurückrollen nicht automatisch gelöscht.
+Für einen Rollback kannst du den vorherigen Stand [V15.4.0](https://github.com/maik26-hub/Magic-Garden-Tools/blob/30721872215586673d446f5fb90725851eba920f/MagicGardenAutoFarm.user.js) im bestehenden Tampermonkey-Skript speichern und die Spielseite neu laden. Nicht zwei AutoFarm-Versionen parallel aktivieren. V16-spezifische lokale Teamvorlagen bleiben möglicherweise im Browser; vorhandene Spielteams werden beim Rollback nicht automatisch gelöscht.
 
 ## Lokale Entwicklerprüfungen
 
