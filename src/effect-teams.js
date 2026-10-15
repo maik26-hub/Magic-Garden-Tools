@@ -234,21 +234,34 @@ function createEffectTeamBuilder() {
     }
     for(const d of comboDefs)buildCombo(d);
     const reserved=new Set(plans.flatMap(t=>t.petIds.map(lower)));
-    function covers(better,worse){
-      if(better.unknown||worse.unknown||!worse.effects.size)return false;
-      for(const [k,e]of worse.effects){
-        const b=better.effects.get(k);if(!b||!b.known||!e.known)return false;
-        if(Object.entries(e.vector).some(([x,v])=>b.vector[x]===undefined||b.vector[x]+1e-9<v))return false;
+    // Portfolio-wide proof: a surplus pet may have three independently useful
+    // abilities. Each ability must be outperformed by a CURRENTLY RESERVED pet,
+    // but the three replacements need not be the SAME pet. Never compare
+    // arbitrary rarity, species or only a partial set of rolls.
+    function coversPortfolio(pool,worse){
+      if(worse.unknown||!worse.effects.size)return null;
+      const replacements=new Map();
+      for(const [key,effect]of worse.effects){
+        if(!effect.known)return null;
+        const better=pool.find(p=>p.id!==worse.id&&!p.unknown&&(()=>{
+          const e=p.effects.get(key);
+          return !!e?.known&&Object.entries(effect.vector).every(([name,value])=>
+            e.vector[name]!==undefined&&e.vector[name]+1e-9>=value);
+        })());
+        if(!better)return null;
+        replacements.set(lower(better.id),better);
       }
-      return true;
+      return [...replacements.values()];
     }
     const retained=owned.filter(p=>reserved.has(lower(p.id)));
     const decisions=owned.map(p=>{
       if(reserved.has(lower(p.id)))return {id:p.id,kind:'keep',reason:'Für ein Effekt- oder AFK-Team reserviert.'};
       if(p.unknown)return {id:p.id,kind:'unknown',reason:'Max-STR oder einzelne Fähigkeiten fehlen bzw. sind nicht sicher vergleichbar.'};
-      const replacement=retained.find(q=>q.id!==p.id&&covers(q,p));
-      return replacement?{id:p.id,kind:'surplus',replacement:replacement.id,reason:'Bei Max-STR vollständig durch '+(replacement.name||replacement.petSpecies)+' abgedeckt.'}:
-        {id:p.id,kind:'keep',reason:'Keine vollständige bessere Abdeckung dieser Fähigkeiten vorhanden.'};
+      const better=coversPortfolio(retained,p);
+      if(!better?.length)return {id:p.id,kind:'keep',reason:'Nicht alle Fähigkeiten werden von reservierten Team-Pets abgedeckt.'};
+      const names=better.map(x=>x.name||x.petSpecies);
+      return {id:p.id,kind:'surplus',replacement:better[0].id,replacements:better.map(x=>x.id),
+        reason:'Alle Max-STR-Boosts durch '+(better.length>1?better.length+' Team-Pets':names[0])+' abgedeckt.'};
     });
     return {ready:!!catalogs.pets&&!!catalogs.abilities,plans,decisions,unknown,reserved:[...reserved],
       owned:owned.map(({effects,...p})=>p),message:!catalogs.pets?'Pet-Katalog fehlt':!catalogs.abilities?'Fähigkeitenkatalog fehlt':

@@ -28,7 +28,9 @@ const definitions={
   SnowyEggGrowthBoost:{name:'Frost Eggs',trigger:'continuous',baseProbability:35,baseParameters:{eggGrowthTimeReductionMinutes:10,requiredWeather:'Frost'}},
   ProduceScaleBoost:{name:'Size',trigger:'continuous',baseProbability:10,baseParameters:{sizeIncrease:10}},
   SeedFinderI:{name:'Seeds I',trigger:'continuous',baseProbability:10,baseParameters:{}},
-  SeedFinderII:{name:'Seeds II',trigger:'continuous',baseProbability:10,baseParameters:{}}
+  SeedFinderII:{name:'Seeds II',trigger:'continuous',baseProbability:10,baseParameters:{}},
+  ProduceEater:{name:'Crop Eater',trigger:'continuous',baseProbability:60,baseParameters:{}},
+  GoldGranter:{name:'Gold Granter',trigger:'continuous',baseProbability:8,baseParameters:{grantedMutations:['Gold']}}
 };
 function catalog(){return {abilities:structuredClone(definitions),pets:{Pig:{name:'Pig',maxScale:2,hoursToMature:12},Squirrel:{name:'Squirrel',maxScale:2,hoursToMature:12},Turtle:{name:'Turtle',maxScale:2,hoursToMature:12},Worm:{diet:['Carrot'],coinsToFullyReplenishHunger:500,maxScale:2,hoursToMature:12}},eggs:{CommonEgg:{name:'Common Egg',coinPrice:100,secondsToHatch:600,faunaSpawnWeights:{Pig:1,Squirrel:1},eligibleShops:['egg']}}};}
 const pet=(id,abilities,max=90,extra={})=>({id,name:id,itemType:'Pet',petSpecies:'Pig',sourceEggId:'CommonEgg',targetScale:1+(max-80)/20,xp:0,hunger:500,abilities,mutations:[],...extra});
@@ -267,4 +269,33 @@ test('configuration keeps independent switches and contains no farm-mode presets
 test('buy editor model preserves only selected item and target, ignores stale budget and price cap',()=>{
  const h=coreFixture();const c=h.e.configure({buyRules:[{type:'Seed',id:'Carrot',maxOwned:14,shop:'auto',maxPrice:0,perRestock:1}],dailyBudget:0,coinReserve:1e99});
  assert.deepEqual(c.buyRules,[{type:'Seed',id:'Carrot',shop:'auto',maxOwned:14}]);assert.equal('dailyBudget'in c,false);
+});
+
+
+test('full inventory portfolio can cover three rolled effects with three different stronger reserved pets',()=>{
+ const boost=['SeedFinderI','ProduceEater','GoldGranter'];
+ const items=[pet('weak-triple',boost,80)];
+ for(const [family,tag] of [['SeedFinderI','seed'],['ProduceEater','eater'],['GoldGranter','gold']]){
+   for(let n=0;n<3;n++)items.push(pet(tag+n,[family],96+n));
+ }
+ const plan=createEffectTeamBuilder().build(snapshot(items),catalog());
+ const weak=plan.decisions.find(p=>p.id==='weak-triple');
+ assert.equal(weak.kind,'surplus');
+ assert.equal(weak.replacements.length,3,'one different team pet covers each rolled effect');
+ assert.ok(weak.replacements.every(id=>plan.reserved.includes(id.toLowerCase())));
+ assert.ok(!plan.reserved.includes('weak-triple'));
+});
+test('portfolio refuses to dispose of a triple-boost pet while any family remains uncovered',()=>{
+ const items=[pet('special',['SeedFinderI','ProduceEater','GoldGranter'],80)];
+ for(let i=0;i<3;i++)items.push(pet('seed'+i,['SeedFinderI'],96+i),pet('eater'+i,['ProduceEater'],96+i));
+ const plan=createEffectTeamBuilder().build(snapshot(items),catalog());
+ const special=plan.decisions.find(p=>p.id==='special');
+ assert.equal(special.kind,'keep');
+ assert.ok(plan.reserved.includes('special'));
+});
+test('unknown ability metadata prevents selling even if other known boosts are covered',()=>{
+ const items=[pet('mystery',['SeedFinderI','FutureSecretBoost'],80)];
+ for(let i=0;i<3;i++)items.push(pet('seed'+i,['SeedFinderI'],96+i));
+ const plan=createEffectTeamBuilder().build(snapshot(items),catalog());
+ assert.equal(plan.decisions.find(p=>p.id==='mystery').kind,'unknown');
 });

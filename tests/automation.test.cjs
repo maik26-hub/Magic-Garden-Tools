@@ -60,3 +60,99 @@ test('revalidation under purchase lock rechecks identity',async()=>{const h=awai
 test('malformed config cannot add arbitrary wire commands or bypass constraints',async()=>{const h=await harness();const c=h.e.configure({enabled:true,buy:true,dailyBudget:-10,seedSpecies:{bad:true},buyRules:[{type:'DevGiveCoins',id:'x',shop:'seed'},{type:'Seed',id:'Carrot',shop:'credits'}],eggPlots:999});assert.equal("dailyBudget" in c,false);assert.equal("coinReserve" in c,false);assert.equal(c.seedSpecies,'');assert.equal(c.buyRules.length,0);assert.equal('eggPlots' in c,false);});
 test('unsafe or unknown product price blocks valuation-dependent consume rules',async()=>{const h=await harness({noCatalogs:true});h.enable({feed:true,keepValue:100});h.s.inventory.items=[produce()];h.s.own.petSlots=[{id:'pet',petSpecies:'Worm',hunger:0}];await h.e.step();assert.equal(h.commands.length,0);assert.equal(h.e.saleAllowed(),false);});
 test('no modules for credits, trades, pet sales, garden destruction or dev commands',async()=>{const h=await harness();const c=h.e.getConfig();for(const key of ['trade','sellPets','credits','dev','uproot'])assert.equal(key in c,false);});
+
+
+test('old auto-favorited Gold crops are re-evaluated and released after a live rule change without F5',async()=>{
+ const h=await harness({onSend:(cmd,s)=>{
+   if(cmd.type==='ToggleLockItem'){
+     const list=s.inventory.favoritedItemIds,id=cmd.itemId,index=list.indexOf(id);
+     if(index>=0)list.splice(index,1);else list.push(id);
+   }
+   return {ok:true};
+ }});
+ h.enable({favorite:true,keepSpecies:['Carrot'],cropSell:true});
+ h.s.inventory.items=[produce('old-gold','Carrot',{mutations:['Gold']}),produce('manual','Blueberry')];
+ h.s.inventory.favoritedItemIds=['manual'];
+ assert.equal(await h.e.step(),true);
+ assert.deepEqual(h.commands,[{type:'ToggleLockItem',itemId:'old-gold'}]);
+ assert.deepEqual(h.s.inventory.favoritedItemIds,['manual','old-gold']);
+ h.advance(3000);
+ h.e.configure({keepSpecies:[],keepValue:0,favorite:false});
+ assert.equal(await h.e.step(),true,'the release must run despite disabling new favorites');
+ assert.deepEqual(h.commands[1],{type:'ToggleLockItem',itemId:'old-gold'});
+ assert.deepEqual(h.s.inventory.favoritedItemIds,['manual'],'the manually marked crop must remain locked');
+ assert.equal(h.e.saleAllowed(),true,'old Gold crop becomes sellable without reload');
+});
+test('automatic crop ownership persists across F5, without claiming a player-marked favorite',async()=>{
+ const st=storage();
+ const sender=(cmd,s)=>{
+   if(cmd.type==='ToggleLockItem'){
+     const index=s.inventory.favoritedItemIds.indexOf(cmd.itemId);
+     if(index>=0)s.inventory.favoritedItemIds.splice(index,1);
+     else s.inventory.favoritedItemIds.push(cmd.itemId);
+   }
+   return {ok:true};
+ };
+ const first=await harness({storage:st,onSend:sender});
+ first.enable({favorite:true,keepSpecies:['Carrot'],cropSell:true});
+ first.s.inventory.items=[produce('bot','Carrot'),produce('manual','Blueberry')];
+ first.s.inventory.favoritedItemIds=['manual'];
+ await first.e.step();
+ const next=await harness({storage:st,onSend:sender});
+ next.s.inventory.items=[produce('bot','Carrot'),produce('manual','Blueberry')];
+ next.s.inventory.favoritedItemIds=['bot','manual'];
+ next.e.configure({favorite:false,keepSpecies:[]});
+ assert.equal(await next.e.step(),true);
+ assert.deepEqual(next.commands,[{type:'ToggleLockItem',itemId:'bot'}]);
+ assert.deepEqual(next.s.inventory.favoritedItemIds,['manual']);
+});
+test('uncertain favorite toggle never authorizes an automatic future unlock',async()=>{
+ const st=storage();
+ const h=await harness({reject:true,storage:st});
+ h.enable({favorite:true,keepSpecies:['Carrot'],cropSell:true});
+ h.s.inventory.items=[produce('uncertain')];
+ await h.e.step();
+ // A later favorite mark might have come from a manual player action; a
+ // timeout cannot establish ownership of the reversible native toggle.
+ const next=await harness({storage:st});
+ next.s.inventory.items=[produce('uncertain')];
+ next.s.inventory.favoritedItemIds=['uncertain'];
+ next.e.configure({favorite:false,keepSpecies:[]});
+ assert.equal(await next.e.step(),false);
+ assert.deepEqual(next.commands,[]);
+});
+test('releasing a once-managed crop waits while native explicit protection remains',async()=>{
+ const h=await harness({onSend:(cmd,s)=>{
+   if(cmd.type==='ToggleLockItem'){
+     const idx=s.inventory.favoritedItemIds.indexOf(cmd.itemId);
+     if(idx>=0)s.inventory.favoritedItemIds.splice(idx,1);else s.inventory.favoritedItemIds.push(cmd.itemId);
+   }return {ok:true};
+ }});
+ h.enable({favorite:true,keepSpecies:['Carrot'],cropSell:true});
+ h.s.inventory.items=[produce('locked')];await h.e.step();h.advance();
+ h.e.configure({favorite:false,keepSpecies:[]});
+ h.s.inventory.items[0].protected=true;
+ assert.equal(await h.e.step(),false);
+ assert.equal(h.commands.length,1);
+ h.s.inventory.items[0].protected=false;h.advance();
+ assert.equal(await h.e.step(),true);
+ assert.equal(h.commands.length,2);
+});
+
+test('a crop can be protected, released, then protected again without F5 or toggling a stale receipt',async()=>{
+ const h=await harness({onSend:(cmd,s)=>{
+   if(cmd.type==='ToggleLockItem'){
+     const n=s.inventory.favoritedItemIds.indexOf(cmd.itemId);
+     if(n>=0)s.inventory.favoritedItemIds.splice(n,1);else s.inventory.favoritedItemIds.push(cmd.itemId);
+   }return {ok:true};
+ }});
+ h.enable({favorite:true,keepSpecies:['Carrot'],cropSell:true});
+ h.s.inventory.items=[produce('reversible')];
+ await h.e.step();assert.deepEqual(h.s.inventory.favoritedItemIds,['reversible']);
+ h.advance();h.e.configure({favorite:false,keepSpecies:[]});
+ await h.e.step();assert.deepEqual(h.s.inventory.favoritedItemIds,[]);
+ h.advance();h.e.configure({favorite:true,keepSpecies:['Carrot']});
+ assert.equal(await h.e.step(),true);
+ assert.deepEqual(h.s.inventory.favoritedItemIds,['reversible']);
+ assert.deepEqual(h.commands.map(c=>c.itemId),['reversible','reversible','reversible']);
+});

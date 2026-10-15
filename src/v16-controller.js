@@ -70,7 +70,12 @@ function createV16Controller(env) {
       if(!why&&!c.petSellEggs.includes(p.sourceEggId))why='Ei-Gruppe nicht freigegeben';
       const d=plan.decisions.find(d=>lc(d.id)===lc(p.id));
       if(!why&&d?.kind!=='surplus')why=d?.reason||'Boostvergleich unklar';
-      if(!why&&(!plan.reserved.includes(lc(d.replacement))||!plan.owned.some(x=>lc(x.id)===lc(d.replacement))))why='Besseres Ersatz-Pet nicht mehr reserviert';
+      if(!why){
+        const backups=arr(d?.replacements).length?d.replacements:[d?.replacement];
+        if(!backups.length||backups.some(id=>!id||!plan.reserved.includes(lc(id))||
+          !plan.owned.some(x=>lc(x.id)===lc(id))))
+          why='Mindestens ein Ersatz-Pet gehört nicht mehr zum aktuellen Team-Bestand';
+      }
       const row={id:p.id,name:p.name||p.petSpecies||'Pet',eligible:!why,reason:why||d.reason};rows.push(row);
       if(!why&&!selected)selected=p;
     }

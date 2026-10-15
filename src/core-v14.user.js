@@ -146,6 +146,7 @@
     lastRejection: "",
     lastError: "",
     cooldowns: new Map(),
+    protectedCooldownKeys: new Set(),
     currentDelay: cfg.adaptive.initialMs,
     lastResponseMs: 0,
     averageResponseMs: 0,
@@ -477,9 +478,19 @@
         if (!Number.isInteger(crop?.slotId)) continue;
         if (!Number.isFinite(crop?.endTime) || crop.endTime > now) continue;
         const key = `${tile}:${crop.slotId}`;
+        // Protection cooldowns are NOT permanent decisions. Re-check the
+        // currently selected mutation/size/field protection rule on every
+        // scan; otherwise a once-Gold crop remains hidden for 30 minutes even
+        // after the player explicitly disables that protection.
+        if (state.protectedCooldownKeys.has(key)) {
+          if (isMarkedProtected(plant, crop)) continue;
+          state.protectedCooldownKeys.delete(key);
+          state.cooldowns.delete(key);
+        }
         if ((state.cooldowns.get(key) || 0) > now) continue;
         if (isMarkedProtected(plant, crop)) {
           state.cooldowns.set(key, now + cfg.protectedSlotCooldownMs);
+          state.protectedCooldownKeys.add(key);
           state.protectedSkips++;
           continue;
         }
@@ -868,7 +879,10 @@
 
     // Nur ABGELAUFENE Cooldowns bereinigen. Pflanzenschutz bleibt intakt.
     for (const [key, until] of state.cooldowns) {
-      if (until <= now) state.cooldowns.delete(key);
+      if (until <= now) {
+        state.cooldowns.delete(key);
+        state.protectedCooldownKeys.delete(key);
+      }
     }
     state.successStreak = 0;
     state.currentDelay = Math.min(prefs.maxHarvestDelayMs,

@@ -1,4 +1,13 @@
-# Magic Garden AutoFarm – V16.1.0
+# Magic Garden AutoFarm – V16.2.0
+
+## Neu in V16.2.0: Bestehenden Bestand nach aktuellen Regeln behandeln
+
+- **Crops: Live-Schutz statt F5.** Wenn du den eigenständigen Mutations- oder Größenschutz abschaltest, wird ein früher wegen Schutz übersprungener Grow-Slot beim nächsten Scan erneut geprüft – ohne 30-Minuten-Alt-Cooldown. Native Pflanzensperren bleiben weiterhin geschützt.
+- **Auto-Favoriten nur mit Eigentumsnachweis wieder freigeben.** Die AutoFarm protokolliert ab dieser Version, welche konkreten Crops **sie selbst** favorisiert hat. Nach einer Regeländerung löst sie diese bot-eigenen Favoriten beim nächsten aktiven Verkaufslauf automatisch und berücksichtigt anschließend auch älteren Bestand. Manuelle Favoriten, ausdrücklich gesperrte Pflanzen und unklare Server-Toggles bleiben unangetastet.
+- **Wichtig bei alten Favoriten aus früheren Versionen:** Es gibt keinen zuverlässigen Herkunftsnachweis. Sie werden aus Sicherheitsgründen nicht automatisch entmarkiert. Falls du sie verkaufen möchtest, musst du den alten manuellen/unklaren Favoriten einmal im Spiel entfernen.
+- **Pet Auto-Sell: Vollständiger Portfolio-Vergleich.** Auch wenn ein Pet **drei verschiedene Fähigkeiten** besitzt, darf es erst als surplus markiert werden, wenn **jede** Fähigkeit bei Max STR durch aktuell reservierte Team-Pets mindestens gleich gut abgedeckt wird. Unterschiedliche Ersatz-Pets dürfen unterschiedliche Fähigkeiten abdecken. Fehlende oder unbekannte Daten blockieren den Verkauf.
+- **Aktuelle Regel ist entscheidend, nicht Erhaltszeitpunkt:** Die Prüfung läuft über den gesamten vorhandenen eigenen Bestand inklusive Inventar, aktiver Pets und Pet Hutch. Teamreservierungen und aktueller Herkunftsei-Filter werden vor jedem möglichen Verkauf erneut validiert. Nur freigegebene, im Inventar liegende Pets können verkauft werden; Favoriten, Sperren, Mutationen und Teammitglieder bleiben geschützt. Bereits unsichere native Verkaufsversuche bleiben gegen Doppelverkauf gesperrt.
+- Keine neue Pflichtoption und kein Farm-Modus. Erklärungen stehen hinter ⓘ.
 
 ## Neu in V16.1.0: Kombinierte Aktions-Teams
 
@@ -14,14 +23,16 @@ Die neuen Pläne haben stabile Schlüssel (`combo:hatch#active`, `combo:cropSale
 Die Gewichtung normalisiert Fähigkeiten je Effekt-Familie und benutzt eine abnehmende Zusatzwirkung weiterer Pets derselben Familie. Es sind **Planungs-Heuristiken** aus den spielseitig geladenen Effektwerten, keine Garantie für Gold-/Hatch-Ergebnisse. Pet-Verkauf bleibt weiter getrennt aktivierbar und vorsichtig.
 
 
-Installierbare Version für Tampermonkey. Quellcode und aktuelles Userscript liegen im [GitHub-Repository](https://github.com/maik26-hub/Magic-Garden-Tools). Der erste Lauf einer neuen Version bleibt aus Sicherheitsgründen gestoppt.
+Lokale, installierbare Testversion auf Basis der V15.4.0 aus
+maik26-hub/Magic-Garden-Tools. **Nicht auf GitHub veröffentlicht.**
 
 ## Installieren
 
 1. Die bisherige AutoFarm in Tampermonkey sichern (Export oder Codekopie).
 2. Die vorhandene „Magic Garden AutoFarm“ im Tampermonkey-Editor öffnen.
-3. Die [V16.1-Userscriptdatei aus `main`](https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js) in Tampermonkey installieren. Alternativ im bestehenden Skript den Editor öffnen und den Inhalt der GitHub-Datei einfügen und speichern.
-4. Magic Garden neu laden. Oben muss `v16.1.0` stehen.
+3. Den kompletten Code durch den Inhalt von `MagicGardenAutoFarm-V16-Test.user.js`
+   ersetzen und speichern. Die gleichnamige TXT enthält exakt denselben Code.
+4. Magic Garden neu laden. Oben muss `v16.2.0` stehen.
 5. Nur **eine AutoFarm** aktiv lassen. Andere Farm-Skripte nicht parallel ausführen.
 
 Name und Namespace bleiben gleich. Die bisherigen Feldfarben, gewählten Eier,
@@ -79,13 +90,13 @@ Klick außerhalb schließt sie. Kopfzeile und Start/Stop bleiben beim Scrollen
 stehen. Zentraler Pflanzenschutz fasst die bisherigen Pflanzen-Schutzschalter
 zusammen; native Sperren/Favoriten und Team-Pets werden immer respektiert.
 
-## Grenzen und Live-Test
+## Grenzen dieser Testversion
 
 Die Tests verwenden simulierte native Spielzustände – **keinen angemeldeten
 Spielaccount**. Ein bestandener Test belegt daher nicht, dass ein neuer
 Spielbuild jede interne Schnittstelle unverändert anbietet. Vor dem ersten
 unbeaufsichtigten Lauf einen einzelnen Verkaufs- und Wechselvorgang beobachten.
-Der GitHub-Push und die CI-Validierung ersetzen **keinen** Live-Test mit deinem Spielaccount. Kauf- und Verkaufsfunktionen sind weiterhin optional.
+Es wird nichts auf GitHub gepusht und kein Hintergrund-Deployment ausgeführt.
 
 Der Team-Builder ist eigenständig, nach dem besprochenen Prinzip. Er liest
 **nicht** Aries' interne Vorschlagskarten und verspricht keine identischen
@@ -99,9 +110,15 @@ Aries/QPM/Garden Companion; der ältere manuelle Aries-Sync ist nur optional.
 
 ## Nachprüfen und zurückrollen
 
-Die GitHub-Actions-Workflows **AutoFarm validation** und **AutoFarm UI** prüfen den reproduzierbaren Build, die Node-Tests und die Browser-Simulation. Screenshots und Logs sind als Workflow-Artefakte verfügbar.
+`delivery-status.json` und `test-report.json` nennen die ausgeführten Tests und
+SHA-256 der konkreten Testdatei. Die Browserberichte und Screenshots befinden
+sich in `test-output/`. Die Logs liegen in `validation-logs/`.
 
-Für einen Rollback kannst du den vorherigen Stand [V15.4.0](https://github.com/maik26-hub/Magic-Garden-Tools/blob/30721872215586673d446f5fb90725851eba920f/MagicGardenAutoFarm.user.js) im bestehenden Tampermonkey-Skript speichern und die Spielseite neu laden. Nicht zwei AutoFarm-Versionen parallel aktivieren. V16-spezifische lokale Teamvorlagen bleiben möglicherweise im Browser; vorhandene Spielteams werden beim Rollback nicht automatisch gelöscht.
+Zum Zurückrollen den Code aus `backup/MagicGardenAutoFarm-V15.4-Backup.user.js`
+in derselben Tampermonkey-Installation speichern und neu laden. Die V16-Datei
+nicht zusätzlich zur alten AutoFarm aktiv lassen. V16-spezifische lokale
+Teamvorlagen können im Browser verbleiben; vorhandene Spielteams werden beim
+Zurückrollen nicht automatisch gelöscht.
 
 ## Lokale Entwicklerprüfungen
 

@@ -1,7 +1,7 @@
 function mountAutomationUI(parent, engine, document) {
   const root=document.createElement('section'); root.id='mg15-automation'; root.className='mg-auto-intro';
   root.style.cssText='border-top:1px solid #355342;margin-top:12px;padding-top:10px';
-  const summary=document.createElement('h3');summary.textContent='Automationen · V16.1';
+  const summary=document.createElement('h3');summary.textContent='Automationen · V16.2';
   summary.style.cssText='font-weight:bold;cursor:pointer';root.appendChild(summary);
   const note=document.createElement('p');note.textContent='Neue Aktionen sind zunächst aus. Module einzeln freigeben. Käufe benötigen nur deine Kaufregeln und genügend Coins. Keine Credits, Trades oder Pet-Verkäufe.';
   note.className='mg-choice-note';note.textContent='Jede Funktion bleibt separat schaltbar. Favoriten, Mutationen, gesperrte Gegenstände und benötigte Team-Pets sind geschützt. Testbuild: kein Live-Test auf deinem Konto.';
@@ -16,7 +16,9 @@ function mountAutomationUI(parent, engine, document) {
   pickers.installStyles(root);
   const dependent=[];
   const HELP={
-    'Pet Auto-Sell einschalten':'Verkauft nur freigegebene Ei-Gruppen, wenn alle Boosts bei Max-STR besser abgedeckt sind. Favoriten, Team-Pets, Mutationen und Sperren bleiben geschützt. Kein pauschales Journal- oder Fünf-Pets-Limit.',
+    'Pet Auto-Sell einschalten':'Prüft ALLE eigenen Pets in Inventar, aktiven Slots und Pet Hutch gegen sämtliche benötigten Teams. Erst wenn alle Max-STR-Fähigkeiten durch reservierte bessere Pets abgedeckt sind und das Herkunftsei erlaubt ist, wird das Pet verkauft. Favoriten, Mutationen und manuelle Teams sind geschützt.',
+    'Wertvolle Produkte favorisieren':'Alte vom Bot gesetzte Favoriten werden nach einer geänderten Schutzregel automatisch freigegeben. Von dir manuell favorisierte Crops bleiben geschützt. Änderungen wirken ohne F5.',
+    'Pflanzen verkaufen':'Berücksichtigt auch alte Crops nach einer Regeländerung. Vom Bot selbst gesetzte alte Favoriten werden nur bei überprüfbarer Herkunft wieder freigegeben. Manuelle Favoriten bleiben geschützt.',
     'Effekt-Teams automatisch speichern':'Speichert Einzelteams sowie Kombis pro Aktion (z. B. Max-STR + Hatch-XP + Double Hatch). Ein Pet mit mehreren Boosts hilft jedem dieser Ziele. AFK-Varianten berücksichtigen Hunger-Unterstützung. Änderungen behalten dieselbe Team-ID.',
     'Passendes Team vor Aktionen einsetzen':'Wechselt erst nach bestätigter Speicherung. Die Aktion wartet auf die echten Teammitglieder; danach Rückkehr zum vorherigen Team.',
     'Leere grüne Felder bepflanzen':'Nur grüne, leere Plätze und vorhandenes ausgewähltes Saatgut. Kauft selbst nichts.',
@@ -78,7 +80,7 @@ function mountAutomationUI(parent, engine, document) {
   check('Wertvolle Produkte favorisieren','favorite',protection);number('Favorisieren ab Basiswert (0 = aus)','keepValue',0,1e12,protection);
   list('Diese Pflanzenarten behalten','keepSpecies',protection);number('Ernten ab Größe (0 = alle)','minHarvestSize',0,100,protection);
   number('Ernten ab Basiswert (0 = alle)','minHarvestValue',0,1e12,protection);list('Nur diese Mutationen ernten','wantedMutations',protection);list('Bei diesem Wetter Ernte pausieren','pauseWeather',protection);
-  const hints=document.createElement('small');hints.textContent='Native Sperren und der vorhandene Mutations-/Max-Größen-Schutz haben immer Vorrang. Favoriten werden nie automatisch entsperrt. Basiswert ist ohne Verkaufs-/Freundesbonus.';protection.appendChild(hints);
+  explain('Aktuelle Regeln gelten sofort auch für bereits geerntete Crops. Ausschließlich nachweislich vom Bot gesetzte Favoriten werden bei Regeländerung freigegeben. Manuell favorisierte oder anderweitig gesperrte Ernten bleiben geschützt. Der Basiswert enthält keine Verkaufs- oder Freundesboni.',protection);
   const pets=section('Pets, Futter & Lager');check('Aktive Pets automatisch füttern','feed',pets);number('Füttern unter Hungerfüllstand (%)','hungerPercent',1,90,pets);number('Maximaler Futter-Basiswert','foodMaxValue',1,1e9,pets);
 
   check('Futtertrog nachfüllen','trough',pets);number('Ziel: Futter im Trog','troughItems',0,50,pets);check('Bestehende Lagerstapel auffüllen','storage',pets);
