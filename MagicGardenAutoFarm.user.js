@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         Magic Garden AutoFarm
 // @namespace    mg-autofarm-local
-// @version      16.2.0
+// @version      16.3.0
 // @updateURL   https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js
 // @downloadURL https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js
-// @description  V16.2.0: live crop-rule rechecks and full-inventory pet boost coverage
+// @description  V16.3.0: Pet Hutch withdrawals and safe portfolio-based Pet Auto-Sell
 // @match        https://magicgarden.gg/*
 // @run-at       document-start
 // @grant        GM_xmlhttpRequest
@@ -1160,7 +1160,7 @@ function createV16Controller(env) {
     if(!Array.isArray(p.mutations))return 'Mutationsdaten fehlen';
     if(p.mutations.length)return 'Mutiertes Pet';
     if(arr(s.own.petSlots).some(isPet))return 'Aktives Team';
-    if(arr(s.inventory.storages).some(st=>arr(st.items).some(isPet)))return 'Pet liegt im Lager';
+    if(arr(s.inventory.storages).some(st=>st?.decorId!=='PetHutch'&&arr(st.items).some(isPet)))return 'Pet liegt in einem anderen Lager';
     if(arr(s.own.petTeams).some(t=>arr(t.members).some(m=>lc(m.petId)===id)))return 'Gespeichertes Team';
     const aries=env.ariesService?.();
     if(aries){try{
@@ -1179,10 +1179,24 @@ function createV16Controller(env) {
     if(!Array.isArray(s.own.petSlots)||!Array.isArray(s.own.petTeams)||!Array.isArray(s.inventory.storages))
       return {pet:null,why:'Aktive Pets, Teams oder Lagerdaten fehlen',rows:[]};
     const plan=refresh(true);if(!plan?.ready)return {pet:null,why:plan?.message||'Pet- und Fähigkeitenkatalog fehlen',rows:[]};
-    const rows=[];let selected=null;
-    for(const raw of s.inventory.items){
+    const rows=[];let selected=null,selectedSource=null;
+    const hutch=s.inventory.storages.filter(st=>st?.decorId==='PetHutch');
+    // Prefer safely redundant Hutch pets, then the weakest Max-STR bag pets.
+    // Inventory and Hutch are *one* owned portfolio, not independent pools.
+    const candidates=[...s.inventory.items.map(p=>({raw:p,source:'Inventar'})),
+      ...hutch.flatMap(st=>arr(st.items).map(p=>({raw:p,source:'Pet Hutch'})))];
+    const maxById=new Map(plan.owned.map(p=>[lc(p.id),p.metrics?.max??Number.POSITIVE_INFINITY]));
+    candidates.sort((a,b)=>Number(b.source==='Pet Hutch')-Number(a.source==='Pet Hutch')||
+      (maxById.get(lc(a.raw?.id))??Infinity)-(maxById.get(lc(b.raw?.id))??Infinity));
+    const locations=new Map();
+    for(const {raw} of candidates)if(raw?.itemType==='Pet'&&typeof raw.id==='string')
+      locations.set(lc(raw.id),(locations.get(lc(raw.id))||0)+1);
+    for(const {raw,source} of candidates){
       const p=raw?.itemType==='Pet'?{...raw,...(raw.data||{})}:null;if(!p||typeof p.id!=='string')continue;
       let why=protection(p,s,plan);
+      if(!why&&locations.get(lc(p.id))!==1)why='Pet-ID ist mehrfach vorhanden – Verkauf gesperrt';
+      if(!why&&source==='Pet Hutch'&&s.inventory.items.length>=98)
+        why='Inventar fast voll – kein Platz zum Herausnehmen';
       if(!why&&!p.sourceEggId)why='Herkunftsei fehlt – wird nicht geraten';
       if(!why&&!c.petSellEggs.includes(p.sourceEggId))why='Ei-Gruppe nicht freigegeben';
       const d=plan.decisions.find(d=>lc(d.id)===lc(p.id));
@@ -1193,45 +1207,65 @@ function createV16Controller(env) {
           !plan.owned.some(x=>lc(x.id)===lc(id))))
           why='Mindestens ein Ersatz-Pet gehört nicht mehr zum aktuellen Team-Bestand';
       }
-      const row={id:p.id,name:p.name||p.petSpecies||'Pet',eligible:!why,reason:why||d.reason};rows.push(row);
-      if(!why&&!selected)selected=p;
+      const row={id:p.id,name:p.name||p.petSpecies||'Pet',source,
+        maxStrength:maxById.get(lc(p.id))??null,eligible:!why,reason:why||d.reason};rows.push(row);
+      if(!why&&!selected){selected=p;selectedSource=source;}
     }
-    return {pet:selected,why:selected?rows.find(r=>r.id===selected.id).reason:
-      rows.length?rows[0].reason:'Keine Pets im Inventar',rows};
+    return {pet:selected,source:selectedSource,
+      why:selected?(selectedSource==='Pet Hutch'?'Zuerst sicher aus Pet Hutch holen · ':'')+rows.find(r=>r.id===selected.id).reason:
+      rows.length?rows[0].reason:'Keine Pets im Inventar oder Pet Hutch',rows};
   }
   const SOLD_KEY='magic_garden_v16_pet_attempts';
   function attempts(){try{const v=JSON.parse(env.storage.getItem(SOLD_KEY)||'{}');return v&&typeof v==='object'?v:{};}catch{return {};}}
   function saveAttempts(v){try{env.storage.setItem(SOLD_KEY,JSON.stringify(v));return true;}catch{return false;}}
   async function send(command,options={}){
+    const retrieving=command.type==='MoveItem'&&command.from==='PetHutch'&&
+      command.to==='inventory'&&command.quantity===1&&typeof command.itemId==='string';
+    const selling=command.type==='SellPet';
+    if(command.type==='MoveItem'&&!retrieving&&command.from==='PetHutch')
+      throw Error('Nicht freigegebener Pet-Hutch-Transfer');
     const execute=async()=>{
       let pet=null,attemptKey=null,epoch=env.snapshot();
-      if(command.type==='SellPet'){
+      if(retrieving||selling){
         const p=salePreview();
-        if(p.pet?.id!==command.itemId)throw Error('Pet-Verkauf blockiert: '+p.why);
-        pet=p.pet;attemptKey=(epoch.ownerKey||epoch.actor)+'|'+lc(pet.id);
+        if(p.pet?.id!==command.itemId||
+           (retrieving&&p.source!=='Pet Hutch')||(selling&&p.source!=='Inventar'))
+          throw Error('Pet-Aktion blockiert: '+p.why);
+        pet=p.pet;attemptKey=(epoch.ownerKey||epoch.actor)+'|'+(retrieving?'retrieve:':'sell:')+lc(pet.id);
         const records=attempts(),old=records[attemptKey];
-        if(old&&old.until>env.now())throw Error('Pet-Verkauf noch unbestätigt; kein erneuter Versuch');
+        if(old&&old.until>env.now())throw Error(retrieving?'Hutch-Entnahme noch unbestätigt; kein erneuter Versuch':
+          'Pet-Verkauf noch unbestätigt; kein erneuter Versuch');
         records[attemptKey]={until:env.now()+600000,state:'pending'};
-        if(!saveAttempts(records))throw Error('Verkaufsschutz konnte nicht gespeichert werden');
+        if(!saveAttempts(records))throw Error('Pet-Aktionsschutz konnte nicht gespeichert werden');
       }
       try{
         const reply=await actions.execute(command,{validate:s=>{
           if(options.validate&&!options.validate(s))return false;
-          if(pet)return salePreview().pet?.id===pet.id;
+          if(pet){const check=salePreview();return check.pet?.id===pet.id&&
+            check.source===(retrieving?'Pet Hutch':'Inventar');}
           return true;
         }});
         if(pet){
           const now=env.snapshot();
-          if(!now||now.actor!==epoch.actor||now.generation!==epoch.generation||
-             builder.pets(now,env.catalogs()).some(p=>lc(p.id)===lc(pet.id))||!reply?.ok)
+          if(!now||now.actor!==epoch.actor||now.generation!==epoch.generation)
+            throw Error('Verbindung während Pet-Aktion geändert');
+          const inBag=arr(now.inventory?.items).some(x=>lc(x.id)===lc(pet.id)&&x.itemType==='Pet');
+          const inHutch=arr(now.inventory?.storages).some(st=>st.decorId==='PetHutch'&&
+            arr(st.items).some(x=>lc(x.id)===lc(pet.id)));
+          if(retrieving){
+            // A command acknowledgement alone is not a transfer. Wait for
+            // the exact ID to leave the Hutch and appear in our inventory.
+            if(!inBag||inHutch)throw Error('Hutch-Entnahme noch nicht im eigenen Inventar bestätigt');
+          }else if(builder.pets(now,env.catalogs()).some(p=>lc(p.id)===lc(pet.id))||!reply?.ok)
             throw Error('Verkauf noch nicht im eigenen Spielzustand bestätigt');
           const records=attempts();records[attemptKey]={until:env.now()+86400000,state:'observed'};saveAttempts(records);
         }
-        lastWork=env.now();return reply;
+        lastWork=env.now();
+        return retrieving?{ok:true,observed:true}:reply;
       }catch(e){notice=e?.message||'Aktion fehlgeschlagen';throw e;}
     };
-    if(command.type==='SellPet'){
-      if(typeof env.withPetLock!=='function')throw Error('Pet-Verkauf benötigt die Browser-Tabsperre');
+    if(retrieving||selling){
+      if(typeof env.withPetLock!=='function')throw Error('Pet-Aktion benötigt die Browser-Tabsperre');
       return env.withPetLock(execute);
     }
     return execute();
@@ -1503,6 +1537,15 @@ function createAutomationCore(env) {
     const proposed=v16.salePreview();
     if(!proposed.pet){reasons.petSell=proposed.why;return null;}
     const pet=proposed.pet;
+    if(proposed.source==='Pet Hutch'){
+      // Never send SellPet against a pet that is still in storage.
+      // The next planning tick rechecks the *entire* portfolio after the
+      // server has confirmed this precise Pet moved into the bag.
+      return job('petSell','retrievepet:'+pet.id,pet.id+':'+pet.targetScale,
+        {type:'MoveItem',from:'PetHutch',to:'inventory',itemId:pet.id,quantity:1},
+        n=>arr(n.inventory?.items).some(i=>i?.id===pet.id&&i.itemType==='Pet')&&
+          !arr(n.inventory?.storages).some(st=>st?.decorId==='PetHutch'&&arr(st.items).some(i=>i?.id===pet.id)),600000);
+    }
     return job('petSell','sellpet:'+pet.id,pet.id+':'+pet.targetScale,
       {type:'SellPet',itemId:pet.id},n=>!arr(n.inventory?.items).some(i=>i?.id===pet.id),600000);
   }
@@ -1577,7 +1620,8 @@ function createAutomationCore(env) {
       ? await env.updateAriesTeam?.(latest.ariesPlan)
       : await v16.send(latest.command,{validate:n=>{
         if(!config[latest.module]&&!(latest.module==='favorite'&&latest.favoriteOp==='clear'&&config.cropSell))return false;
-        if(!['HatchEgg','SellPet'].includes(latest.command.type))return true;
+        if(!['HatchEgg','SellPet'].includes(latest.command.type)&&
+           !(latest.command.type==='MoveItem'&&latest.command.from==='PetHutch'))return true;
         const held=receipts.get(latest.key);receipts.delete(latest.key);
         try{const check=planners[latest.module](n);return !!check&&check.key===latest.key;}
         finally{if(held)receipts.set(latest.key,held);}
@@ -1748,7 +1792,7 @@ function createChoiceControls(doc, save, getConfig) {
 function mountAutomationUI(parent, engine, document) {
   const root=document.createElement('section'); root.id='mg15-automation'; root.className='mg-auto-intro';
   root.style.cssText='border-top:1px solid #355342;margin-top:12px;padding-top:10px';
-  const summary=document.createElement('h3');summary.textContent='Automationen · V16.2';
+  const summary=document.createElement('h3');summary.textContent='Automationen · V16.3';
   summary.style.cssText='font-weight:bold;cursor:pointer';root.appendChild(summary);
   const note=document.createElement('p');note.textContent='Neue Aktionen sind zunächst aus. Module einzeln freigeben. Käufe benötigen nur deine Kaufregeln und genügend Coins. Keine Credits, Trades oder Pet-Verkäufe.';
   note.className='mg-choice-note';note.textContent='Jede Funktion bleibt separat schaltbar. Favoriten, Mutationen, gesperrte Gegenstände und benötigte Team-Pets sind geschützt. Testbuild: kein Live-Test auf deinem Konto.';
@@ -1878,7 +1922,7 @@ function mountAutomationUI(parent, engine, document) {
     }
   }
 
-  // Opt-in Pet Auto-Sell. Only safely dominated *inventory* pets with a
+  // Opt-in Pet Auto-Sell. Only safely dominated inventory/Hutch pets with a
   // specifically allowed source egg are eligible. Never bulk-sell by rarity.
   const petSellUI=document.createElement('details');petSellUI.className='mg-pet-autosell';petSellUI.open=true;
   const petSellHead=document.createElement('summary');petSellHead.textContent='Pet Auto-Sell · sichere Duplikate';
@@ -1888,7 +1932,7 @@ function mountAutomationUI(parent, engine, document) {
     'Nur Pets aus diesen Eiern verkaufen','petSellEggs','petSellOriginChoices');
 
   const petSellPreview=live('Wird geladen …',petSellUI);
-  explain('Nur nachweisbar schwächere Pets mit abgedeckten Max-Level-Boosts. Aktive, gesperrte, favorisierte, mutierte, in Teams/Pet Hutch benutzte Pets und unbekannte Ei-Herkunft bleiben geschützt. Leere Eier-Auswahl = kein Verkauf. Keine automatischen Pet-Verkäufe ohne Aktivierung.',petSellUI);
+  explain('Nur nachweisbar schwächere Pets mit abgedeckten Max-Level-Boosts. Aktive, gesperrte, favorisierte, mutierte, in Teams benötigte Pets und unbekannte Ei-Herkunft bleiben geschützt. Leere Eier-Auswahl = kein Verkauf. Keine automatischen Pet-Verkäufe ohne Aktivierung.',petSellUI);
   pets.insertBefore(petSellUI,manager);
 
   // Aries exposes saved teams through QWS_PetsService, but NOT the Team
@@ -1922,6 +1966,7 @@ function mountAutomationUI(parent, engine, document) {
     petSellPreview.textContent=c.petSell
       ? (proposed?.pet
         ? 'Nächster sicherer Kandidat: '+(proposed.pet.name||proposed.pet.petSpecies)+
+          ' · '+(proposed.source==='Pet Hutch'?'Pet Hutch → Inventar → Verkauf':'Inventar → Verkauf')+
           ' · Herkunft: '+proposed.pet.sourceEggId+
           ' · '+proposed.why
         : 'Verkauf wartet: '+(proposed?.why||'Spieldaten fehlen'))
@@ -2524,7 +2569,7 @@ function mountFieldGrid(container, plan, onChange) {
   }
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-  const VERSION = "16.2.0";
+  const VERSION = "16.3.0";
   const UPDATE_URL = "https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js";
   const NUMBER_FIELDS = Object.freeze({
     sellThreshold: { min: 5, max: 200, step: 1 },
@@ -3995,5 +4040,5 @@ function mountFieldGrid(container, plan, onChange) {
   if (!firstV16 && readValue(sessionStorage, KEYS.resume) === "1") {
     start({ auto: true });
   }
-  console.log("✅ Magic Garden AutoFarm V16.2.0 geladen (Automationszentrale, ohne Fremdskripte).");
+  console.log("✅ Magic Garden AutoFarm V16.3.0 geladen (Automationszentrale, ohne Fremdskripte).");
 })();

@@ -43,6 +43,12 @@ SETUP=r"""() => {
      for(const s of __own.inventory.storages)s.items=s.items.filter(p=>!wanted.includes(p.id));
      __own.petSlots=incoming;
     }reply=false;
+   }else if(c.type==='MoveItem'&&c.from==='PetHutch'&&c.to==='inventory'){
+     const st=__own.inventory.storages.find(st=>st.decorId==='PetHutch');
+     const found=st?.items.find(p=>p.id===c.itemId);
+     if(!found){ok=false;}else if(__saleMode!=='hutchAckOnly'){
+       st.items=st.items.filter(p=>p!==found);__own.inventory.items.push(found);
+     }
    }else if(c.type==='SellPet'){
     if(__saleMode==='reject'){ok=false;}
     else if(__saleMode==='ackOnly'){}
@@ -75,6 +81,9 @@ with sync_playwright() as p:
     api='MGAutoFarmV13.automation'
     page.evaluate(f'{api}.configure({{enabled:true,teamBuilder:true,autoTeams:false,petSell:false,harvest:false,cropSell:false}})')
     page.evaluate('MGAutoFarmV13.state.running=true')
+    # The mocked socket and UI initialization are asynchronous; CI machines
+    # can need more than the fixed initial sleep to populate the pet snapshot.
+    page.wait_for_function('(() => { const s=MGAutoFarmV13.automation.teamState(); return s.ready && s.proposals.length>=7 && s.plans.length===s.proposals.length; })()',timeout=12000)
     state=page.evaluate(f'{api}.teamState()')
     check('per-effect and AFK proposals exist from current owned pet data',len(state['proposals'])>=7 and any(t['mode']=='afk' for t in state['proposals']))
     check('templates saved locally even before native save confirmations',len(state['plans'])==len(state['proposals']))
@@ -126,6 +135,31 @@ with sync_playwright() as p:
     page.evaluate(f'{api}.step()')
     check('ACK-only pet sale times out without a false sale counter',page.evaluate(f'{api}.status().modules.find(m=>m.id==="petSell").confirmed')==count)
     check('uncertain pet sale gets a human-readable diagnostic', 'bestätigt' in page.evaluate(f'{api}.status().modules.find(m=>m.id==="petSell").status'))
+    # Regression: the best pig is in the bag, three weaker hatch-XP+STR
+    # pigs are in the Pet Hutch; never sell a Hutch pet directly.
+    page.evaluate('''() => {
+      __saleMode='noAck';__own.inventory.items=[__pet('new-best',['PetHatchSizeBoost','PetAgeBoost'],99)];
+      __own.inventory.storages[0].items=[__pet('weak-hutch',['PetHatchSizeBoost','PetAgeBoost'],90),
+        __pet('mid-hutch',['PetHatchSizeBoost','PetAgeBoost'],94),
+        __pet('good-hutch',['PetHatchSizeBoost','PetAgeBoost'],96)];
+      __patch();
+    }''')
+    page.evaluate(f'{api}.configure({{teamBuilder:false,autoTeams:false,petSell:true,petSellEggs:["RareEgg"]}})')
+    proposal=page.evaluate(f'{api}.petSellProposal()')
+    check('surplus Pet in Hutch is selected from full inventory+Hutch Max STR',
+      proposal['source']=='Pet Hutch' and proposal['pet']['id']=='weak-hutch')
+    start=page.evaluate('__sent.length')
+    page.evaluate('__clock+=2500')
+    page.evaluate(f'{api}.step()')
+    flow=page.evaluate('(i)=>__sent.slice(i).map(c=>c.type)',start)
+    check('native MoveItem from Hutch to inventory occurs before SellPet',flow==['MoveItem'] and
+      page.evaluate('__own.inventory.items.some(p=>p.id==="weak-hutch")'))
+    page.evaluate('__clock+=2500')
+    page.evaluate(f'{api}.step()')
+    flow=page.evaluate('(i)=>__sent.slice(i).map(c=>c.type)',start)
+    check('Hutch pig is sold only after it is observed in bag',flow==['MoveItem','SellPet'] and
+      page.evaluate('!__own.inventory.items.some(p=>p.id==="weak-hutch")') and
+      page.evaluate('__own.inventory.storages[0].items.some(p=>p.id==="good-hutch")'))
     page.evaluate('MGAutoFarmV13.state.running=false')
     # Show the actual UI with generated cards and delayed information.
     back=page.get_by_role('button',name='Zur Übersicht',exact=True)

@@ -17,7 +17,7 @@ OUT = ROOT / 'validation-logs'
 OUT.mkdir(exist_ok=True)
 NODE_TESTS = ['main-upgrade', 'automation', 'reservations', 'field-roles',
               'catalog-source', 'egg-filters', 'updater', 'pet-advisor',
-              'pet-automation', 'v16']
+              'pet-automation', 'v16', 'hutch-autosell']
 BROWSERS = {
     'compact_menu': 'test-output/report.json',
     'field_choices': 'test-output/field-choices/report.json',
@@ -102,7 +102,7 @@ for script, file in BROWSERS.items():
                                'report': file})
 
 report = {
-    'version': '16.2.0', 'test_build': True,
+    'version': '16.3.0', 'test_build': True,
     'started_utc': started, 'completed_utc': datetime.now(timezone.utc).isoformat(),
     'published_to_github': False, 'live_game_tested': False,
     'environment': 'Local Node and Chromium offline simulated native game state',
