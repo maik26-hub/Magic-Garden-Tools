@@ -2,18 +2,32 @@
 module.exports=function applyV16(src,tooltipSource){
   function rep(a,b,label){if(src.split(a).length!==2)throw Error('V16 '+label+': anchor not unique');src=src.replace(a,b);}
   rep('      let timeout;\n      const cancel',`      let timeout, observeTimer, ack=null;
-      const observed=['SellPet','SavePetTeam','ApplyPetTeam'].includes(command.type);
+      const retrieving=command.type==='MoveItem'&&command.from==='PetHutch'&&command.to==='inventory';
+      const photographing=command.type==='PhotographGhost';
+      const observed=retrieving||photographing||['SellPet','SavePetTeam','ApplyPetTeam'].includes(command.type);
+      const catchBefore=bridge.game?.ghostCatches?.[command.ghostIndex]?.lastCaughtAtMs??null;
       const actorAtSend=bridge.actor, revisionAtSend=bridge.revision||0;
       function verifyState(){
         if(!observed||finished)return false;
         if(bridge.socket!==ws||bridge.generation!==generation||bridge.actor!==actorAtSend){cancel();return false;}
         if((bridge.revision||0)<=revisionAtSend)return false;
         const own=bridge.own;
+        if(bridge.inventory?.storages?.some(st=>!st||!Array.isArray(st.items)))return false;
         if(!own||!Array.isArray(own.petSlots)||!Array.isArray(own.petTeams)||!Array.isArray(bridge.inventory?.items)||!Array.isArray(bridge.inventory?.storages))return false;
         const norm=v=>String(v||'').toLowerCase();
         const canon=ids=>ids.map(norm).sort().join('|');
         let matches=false;
-        if(command.type==='SellPet'){
+        if(photographing){
+          const c=bridge.game?.ghostCatches?.[command.ghostIndex];
+          const owner=bridge.lastFullState?.data?.players?.find(p=>p.id===bridge.playerId)?.databaseUserId;
+          matches=ack?.ok===true&&ack.commandType==='PhotographGhost'&&Number.isFinite(c?.lastCaughtAtMs)&&
+            (catchBefore===null||c.lastCaughtAtMs>catchBefore)&&Array.isArray(c.photographerIds)&&
+            c.photographerIds.some(id=>id===actorAtSend||!!owner&&id===owner);
+        }else if(retrieving){
+          const bag=bridge.inventory.items.filter(p=>norm(p?.id)===norm(command.itemId)&&p.itemType==='Pet');
+          const stored=bridge.inventory.storages.some(st=>!Array.isArray(st?.items)||st.items.some(p=>norm(p?.id)===norm(command.itemId)));
+          matches=bag.length===1&&!stored;
+        }else if(command.type==='SellPet'){
           const all=[...own.petSlots.map(p=>p.slot||p),...bridge.inventory.items,...bridge.inventory.storages.flatMap(s=>Array.isArray(s.items)?s.items:[])];
           matches=!all.some(p=>norm(p?.id)===norm(command.itemId));
         }else if(command.type==='SavePetTeam'){
@@ -27,7 +41,7 @@ module.exports=function applyV16(src,tooltipSource){
         return false;
       }
       const cancel`,'state-driven observer');
-  rep('        clearTimeout(timeout);\n        ws.removeEventListener', '        clearTimeout(timeout);\n        clearTimeout(observeTimer);\n        ws.removeEventListener','cancel observer');
+  rep('        clearTimeout(timeout);\n        ws.removeEventListener', '        clearTimeout(timeout);\n        clearInterval(observeTimer);\n        ws.removeEventListener','cancel observer');
   rep('          error.code = code;', '          error.definite = true;\n          error.code = code;', 'known rejection');
   rep('        finish(null, msg);\n      }', '        if(observed){ack=msg;verifyState();}else finish(null, msg);\n      }','wait beyond ack');
   rep('      timeout = setTimeout(() => finish(new Error("Server-Timeout")), cfg.commandTimeoutMs);',

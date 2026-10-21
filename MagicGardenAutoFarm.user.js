@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         Magic Garden AutoFarm
 // @namespace    mg-autofarm-local
-// @version      16.3.1
+// @version      16.3.2
 // @updateURL   https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js
 // @downloadURL https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js
-// @description  V16.3.1: Jotai room state compatibility for build 1684+
+// @description  V16.3.2: safe Pet Auto-Sell and optional verified Ghost Capture
 // @match        https://magicgarden.gg/*
 // @run-at       document-start
 // @grant        GM_xmlhttpRequest
@@ -1115,6 +1115,62 @@ function createTeamActions(env){
 }
 
 
+/* Read live native atoms only. An old command or catch timestamp is never an
+ * instance source. Unknown native schemas deliberately produce no command. */
+function readNativeGhostState(page) {
+  const store=page?.__jotaiStore,cache=page?.jotaiAtomCache;
+  const atoms=cache instanceof Map?cache:cache?.cache;
+  if(typeof store?.get!=='function'||!(atoms instanceof Map))return null;
+  const values=new Map();
+  try {
+    for(const atom of atoms.values()){
+      const label=String(atom?.debugLabel||'').split('/').pop();
+      if(['dayNightStageAtom','isHoldingCameraAtom','cameraTargetAtom','ghostCatchesAtom'].includes(label)||/ghost/i.test(label)){
+        if(values.has(label))return null; // ambiguous labels are not authoritative
+        values.set(label,store.get(atom));
+      }
+    }
+  }catch{return null;}
+  const instances=[];
+  // Accept only explicit instance + visibility data in a current ghost atom.
+  // Do not derive IDs from ghostCatches, route time, night number or indexes.
+  for(const [label,value]of values){
+    if(!/ghost/i.test(label)||label==='ghostCatchesAtom')continue;
+    for(const row of Array.isArray(value)?value: value&&typeof value==='object'?[value,...Object.values(value)]:[]){
+      if(row&&Number.isInteger(row.ghostIndex)&&typeof row.ghostInstanceId==='string'&&row.visible===true)
+        instances.push({ghostIndex:row.ghostIndex,ghostInstanceId:row.ghostInstanceId,visible:true});
+    }
+  }
+  return {stage:values.get('dayNightStageAtom'),holding:values.get('isHoldingCameraAtom'),
+    target:values.get('cameraTargetAtom'),catches:values.get('ghostCatchesAtom'),instances};
+}
+function createGhostCapture(){
+  const validId=v=>typeof v==='string'&&v.length>0&&v.length<200;
+  function propose(s){
+    const no=why=>({command:null,why}),g=s?.ghost;
+    if(!g)return no('Ghost-Spielzustand nicht verfügbar');
+    if(g.stage!=='night')return no('Warte auf bestätigte Nacht');
+    if(g.holding!==true)return no('Kamera muss gehalten werden');
+    if(!Number.isFinite(g.target?.x)||!Number.isFinite(g.target?.y))return no('Kameraziel fehlt');
+    if(!s.game?.ghostCatches||typeof s.game.ghostCatches!=='object'||Array.isArray(s.game.ghostCatches))return no('Server-Fangdaten fehlen');
+    const rows=Array.isArray(g.instances)?g.instances:[];
+    const p=rows.find(p=>Number.isInteger(p?.ghostIndex)&&p.ghostIndex>=0&&validId(p.ghostInstanceId)&&p.visible===true);
+    if(!p)return no('Aktuelle Ghost-Instanz/Sichtbarkeit nicht verfügbar – kein Foto');
+    if(rows.filter(x=>x?.ghostIndex===p.ghostIndex).length!==1)return no('Ghost-Zuordnung mehrdeutig');
+    return {command:{type:'PhotographGhost',ghostIndex:p.ghostIndex,ghostInstanceId:p.ghostInstanceId},
+      actor:s.actor,ownerKey:s.ownerKey,generation:s.generation,before:s.game.ghostCatches[p.ghostIndex]?.lastCaughtAtMs??null,
+      why:'Sichtbare aktuelle Ghost-Instanz bereit'};
+  }
+  function confirmed(p,s){
+    if(!s||s.actor!==p.actor||s.generation!==p.generation||s.ownerKey!==p.ownerKey)return false;
+    const c=s.game?.ghostCatches?.[p.command.ghostIndex];
+    return Number.isFinite(c?.lastCaughtAtMs)&&(p.before===null||c.lastCaughtAtMs>p.before)&&
+      Array.isArray(c.photographerIds)&&c.photographerIds.some(id=>id===p.actor||!!p.ownerKey&&id===p.ownerKey);
+  }
+  return {propose,confirmed};
+}
+
+
 /* V16 coordination. All destructive operations still share the existing game
  * command pipe. Preview methods send nothing. No external mod is required.
  */
@@ -1171,6 +1227,7 @@ function createV16Controller(env) {
     if(lc(s.heldId)===id)return 'Pet gerade ausgewählt';
     return '';
   }
+  let validatingAttempt=null;
   function salePreview(){
     const c=env.config(),s=env.snapshot();
     if(!s)return {pet:null,why:'Eigene Spieldaten fehlen',rows:[]};
@@ -1178,27 +1235,39 @@ function createV16Controller(env) {
     if(!arr(c.petSellEggs).length)return {pet:null,why:'Keine Ei-Gruppe zum Pet-Verkauf ausgewählt',rows:[]};
     if(!Array.isArray(s.own.petSlots)||!Array.isArray(s.own.petTeams)||!Array.isArray(s.inventory.storages))
       return {pet:null,why:'Aktive Pets, Teams oder Lagerdaten fehlen',rows:[]};
+    if(!Array.isArray(s.inventory.items)||!Array.isArray(s.inventory.favoritedItemIds)||
+      s.inventory.storages.some(st=>!st||typeof st.decorId!=='string'||!Array.isArray(st.items))||
+      s.inventory.storages.filter(st=>st.decorId==='PetHutch').length>1||
+      s.own.petTeams.some(t=>!t||!Array.isArray(t.members)||t.members.some(m=>typeof m?.petId!=='string')))
+      return {pet:null,why:'Inventar-/Hutch-/Team-Zuordnung unvollständig',rows:[]};
     const plan=refresh(true);if(!plan?.ready)return {pet:null,why:plan?.message||'Pet- und Fähigkeitenkatalog fehlen',rows:[]};
     const rows=[];let selected=null,selectedSource=null;
     const hutch=s.inventory.storages.filter(st=>st?.decorId==='PetHutch');
-    // Prefer safely redundant Hutch pets, then the weakest Max-STR bag pets.
+    // Prefer surplus bag pets, then retrieve the weakest surplus Hutch pet.
     // Inventory and Hutch are *one* owned portfolio, not independent pools.
     const candidates=[...s.inventory.items.map(p=>({raw:p,source:'Inventar'})),
       ...hutch.flatMap(st=>arr(st.items).map(p=>({raw:p,source:'Pet Hutch'})))];
     const maxById=new Map(plan.owned.map(p=>[lc(p.id),p.metrics?.max??Number.POSITIVE_INFINITY]));
-    candidates.sort((a,b)=>Number(b.source==='Pet Hutch')-Number(a.source==='Pet Hutch')||
+    candidates.sort((a,b)=>Number(a.source==='Pet Hutch')-Number(b.source==='Pet Hutch')||
       (maxById.get(lc(a.raw?.id))??Infinity)-(maxById.get(lc(b.raw?.id))??Infinity));
     const locations=new Map();
     for(const {raw} of candidates)if(raw?.itemType==='Pet'&&typeof raw.id==='string')
       locations.set(lc(raw.id),(locations.get(lc(raw.id))||0)+1);
     for(const {raw,source} of candidates){
-      const p=raw?.itemType==='Pet'?{...raw,...(raw.data||{})}:null;if(!p||typeof p.id!=='string')continue;
-      let why=protection(p,s,plan);
+      const p=raw?.itemType==='Pet'?{...raw,...(raw.data||{}),id:raw.id,itemType:raw.itemType}:null;if(!p||typeof p.id!=='string')continue;
+      let why=protection(raw,s,plan)||protection(p,s,plan);
+      if(!why&&raw.data?.id&&lc(raw.data.id)!==lc(raw.id))why='Widersprüchliche Pet-ID';
+      if(!why&&(!Array.isArray(p.abilities)||!p.abilities.length||p.abilities.some(a=>typeof a!=='string')||
+        !Number.isFinite(p.xp)||!Number.isFinite(p.targetScale)))why='Pet-Metadaten unvollständig';
       if(!why&&locations.get(lc(p.id))!==1)why='Pet-ID ist mehrfach vorhanden – Verkauf gesperrt';
       if(!why&&source==='Pet Hutch'&&s.inventory.items.length>=98)
         why='Inventar fast voll – kein Platz zum Herausnehmen';
       if(!why&&!p.sourceEggId)why='Herkunftsei fehlt – wird nicht geraten';
       if(!why&&!c.petSellEggs.includes(p.sourceEggId))why='Ei-Gruppe nicht freigegeben';
+      const ledger=attempts(),attempt=ledger?.[(s.ownerKey||s.actor)+'|'+(source==='Pet Hutch'?'retrieve:':'sell:')+lc(p.id)];
+      if(!why&&!ledger)why='Pet-Aktionsprotokoll beschädigt – Verkauf gesperrt';
+      if(!why&&attempt&&validatingAttempt!==((s.ownerKey||s.actor)+'|'+(source==='Pet Hutch'?'retrieve:':'sell:')+lc(p.id))&&(attempt.state!=='rejected'||attempt.until>env.now()))
+        why=attempt.state==='rejected'?'Serverablehnung – vorsichtige Wiederholung frühestens nach 30 Sekunden':'Pet-Aktion bereits versucht; Ergebnis abwarten, kein Duplikat';
       const d=plan.decisions.find(d=>lc(d.id)===lc(p.id));
       if(!why&&d?.kind!=='surplus')why=d?.reason||'Boostvergleich unklar';
       if(!why){
@@ -1216,12 +1285,34 @@ function createV16Controller(env) {
       rows.length?rows[0].reason:'Keine Pets im Inventar oder Pet Hutch',rows};
   }
   const SOLD_KEY='magic_garden_v16_pet_attempts';
-  function attempts(){try{const v=JSON.parse(env.storage.getItem(SOLD_KEY)||'{}');return v&&typeof v==='object'?v:{};}catch{return {};}}
+  function attempts(){try{const v=JSON.parse(env.storage.getItem(SOLD_KEY)||'{}');return v&&typeof v==='object'&&!Array.isArray(v)?v:null;}catch{return null;}}
   function saveAttempts(v){try{env.storage.setItem(SOLD_KEY,JSON.stringify(v));return true;}catch{return false;}}
   async function send(command,options={}){
     const retrieving=command.type==='MoveItem'&&command.from==='PetHutch'&&
       command.to==='inventory'&&command.quantity===1&&typeof command.itemId==='string';
     const selling=command.type==='SellPet';
+    if(command.type==='PhotographGhost'){
+      if(typeof env.withPetLock!=='function')throw Error('Ghost-Aktion benötigt Browser-Tabsperre');
+      return env.withPetLock(async()=>{
+        const Factory=typeof createGhostCapture==='function'?createGhostCapture:require('./ghost-capture.js').createGhostCapture;
+        const g=Factory(),p=g.propose(env.snapshot());
+        if(!env.config().ghostCapture||!p.command||JSON.stringify(p.command)!==JSON.stringify(command))throw Error(p.why||'Ghost-Aktion nicht freigegeben');
+        const key=(p.ownerKey||p.actor)+'|ghost:'+command.ghostInstanceId,records=attempts();
+        if(!records||records[key])throw Error('Ghost-Instanz bereits versucht oder Protokoll unklar');
+        const rateKey=(p.ownerKey||p.actor)+'|ghost-rate';
+        if(records[rateKey]?.until>env.now()){const e=Error('Ghost-Rate-Limit: mindestens zehn Sekunden Abstand');e.notSent=true;throw e;}
+        records[rateKey]={until:env.now()+10000};
+        records[key]={state:'pending',until:Number.MAX_SAFE_INTEGER};
+        if(!saveAttempts(records))throw Error('Ghost-Aktionsschutz nicht speicherbar');
+        const reply=await actions.execute(command,{validate:s=>{
+          const fresh=g.propose(s);
+          return env.config().ghostCapture&&fresh.actor===p.actor&&fresh.generation===p.generation&&
+            JSON.stringify(fresh.command)===JSON.stringify(command)&&(!options.validate||options.validate(s));
+        }});
+        if(!reply?.ok||!g.confirmed(p,env.snapshot()))throw Error('Ghost-Fang noch nicht im Server-State bestätigt');
+        return reply;
+      });
+    }
     if(command.type==='MoveItem'&&!retrieving&&command.from==='PetHutch')
       throw Error('Nicht freigegebener Pet-Hutch-Transfer');
     const execute=async()=>{
@@ -1232,22 +1323,25 @@ function createV16Controller(env) {
            (retrieving&&p.source!=='Pet Hutch')||(selling&&p.source!=='Inventar'))
           throw Error('Pet-Aktion blockiert: '+p.why);
         pet=p.pet;attemptKey=(epoch.ownerKey||epoch.actor)+'|'+(retrieving?'retrieve:':'sell:')+lc(pet.id);
-        const records=attempts(),old=records[attemptKey];
-        if(old&&old.until>env.now())throw Error(retrieving?'Hutch-Entnahme noch unbestätigt; kein erneuter Versuch':
+        const records=attempts();if(!records)throw Error('Pet-Aktionsprotokoll beschädigt – Verkauf gesperrt');
+        const old=records[attemptKey];
+        if(old&&(old.state!=='rejected'||old.until>env.now()))throw Error(retrieving?'Hutch-Entnahme noch unbestätigt; kein erneuter Versuch':
           'Pet-Verkauf noch unbestätigt; kein erneuter Versuch');
-        records[attemptKey]={until:env.now()+600000,state:'pending'};
+        records[attemptKey]={until:Number.MAX_SAFE_INTEGER,state:'pending',tries:(old?.tries||0)+1};
         if(!saveAttempts(records))throw Error('Pet-Aktionsschutz konnte nicht gespeichert werden');
       }
       try{
         const reply=await actions.execute(command,{validate:s=>{
+          validatingAttempt=attemptKey;try{
           if(options.validate&&!options.validate(s))return false;
           if(pet){const check=salePreview();return check.pet?.id===pet.id&&
             check.source===(retrieving?'Pet Hutch':'Inventar');}
           return true;
+          }finally{validatingAttempt=null;}
         }});
         if(pet){
           const now=env.snapshot();
-          if(!now||now.actor!==epoch.actor||now.generation!==epoch.generation)
+          if(!now||now.actor!==epoch.actor||now.generation!==epoch.generation||now.ownerKey!==epoch.ownerKey)
             throw Error('Verbindung während Pet-Aktion geändert');
           const inBag=arr(now.inventory?.items).some(x=>lc(x.id)===lc(pet.id)&&x.itemType==='Pet');
           const inHutch=arr(now.inventory?.storages).some(st=>st.decorId==='PetHutch'&&
@@ -1258,11 +1352,19 @@ function createV16Controller(env) {
             if(!inBag||inHutch)throw Error('Hutch-Entnahme noch nicht im eigenen Inventar bestätigt');
           }else if(builder.pets(now,env.catalogs()).some(p=>lc(p.id)===lc(pet.id))||!reply?.ok)
             throw Error('Verkauf noch nicht im eigenen Spielzustand bestätigt');
-          const records=attempts();records[attemptKey]={until:env.now()+86400000,state:'observed'};saveAttempts(records);
+          const records=attempts();records[attemptKey]={until:Number.MAX_SAFE_INTEGER,state:'observed'};saveAttempts(records);
         }
         lastWork=env.now();
         return retrieving?{ok:true,observed:true}:reply;
-      }catch(e){notice=e?.message||'Aktion fehlgeschlagen';throw e;}
+       }catch(e){
+        // Only an explicit server rejection proves that no action happened.
+        // Timeouts and disconnects stay blocked indefinitely, including reloads.
+        if(attemptKey&&e?.definite===true){
+          const records=attempts(),r=records?.[attemptKey];
+          if(r&&r.tries<3){r.until=env.now()+30000;r.state='rejected';saveAttempts(records);}
+        }
+        notice=e?.message||'Aktion fehlgeschlagen';throw e;
+      }
     };
     if(retrieving||selling){
       if(typeof env.withPetLock!=='function')throw Error('Pet-Aktion benötigt die Browser-Tabsperre');
@@ -1304,8 +1406,8 @@ function createAutomationCore(env) {
   'use strict';
   const clone=value=>typeof structuredClone==='function'?structuredClone(value):JSON.parse(JSON.stringify(value));
   const KEY='magic_garden_automation_v15', LEDGER='magic_garden_purchase_budget_v15', RECEIPTS='magic_garden_action_receipts_v15', AUTO_MARKS='magic_garden_own_crop_favorites_v16';
-  const names={favorite:'Wertschutz / Favoriten',journal:'Journal',feed:'Pets füttern',trough:'Futtertrog',claims:'Quest-Belohnungen',hatch:'Eier ausbrüten',plant:'Nachpflanzen',eggs:'Eier nachlegen',water:'Gießen',storage:'Lager',teams:'Wetter-Petteams',buy:'Shop-Einkauf',petSell:'Pet Auto-Sell',ariesSync:'Aries-Teams aktualisieren'};
-  const defaults={enabled:false,harvest:true,cropSell:true,favorite:false,journal:false,feed:false,trough:false,claims:false,hatch:false,plant:false,eggs:false,water:false,storage:false,teams:false,buy:false,petSell:false,ariesSync:false,petSellEggs:[],petSellPerSession:0,teamBuilder:false,autoTeams:false,hatchTeamKey:'',sellTeamKey:'',petSellTeamKey:'',idleTeamKey:'',ariesManagedTeams:[],seedSpecies:'',eggPlaceMode:'all',eggPlaceAllowed:[],eggHatchMode:'all',eggHatchAllowed:[],hungerPercent:30,foodMaxValue:1000,troughItems:5,toolReserve:2,waterMinSeconds:600,keepValue:0,keepSpecies:[],minHarvestSize:0,minHarvestValue:0,wantedMutations:[],pauseWeather:[],buyRules:[],teamRules:[],actionIntervalMs:900};
+  const names={favorite:'Wertschutz / Favoriten',journal:'Journal',feed:'Pets füttern',trough:'Futtertrog',claims:'Quest-Belohnungen',hatch:'Eier ausbrüten',plant:'Nachpflanzen',eggs:'Eier nachlegen',water:'Gießen',storage:'Lager',teams:'Wetter-Petteams',buy:'Shop-Einkauf',petSell:'Pet Auto-Sell',ghostCapture:'Auto Ghost Capture',ariesSync:'Aries-Teams aktualisieren'};
+  const defaults={enabled:false,harvest:true,cropSell:true,favorite:false,journal:false,feed:false,trough:false,claims:false,hatch:false,plant:false,eggs:false,water:false,storage:false,teams:false,buy:false,petSell:false,ghostCapture:false,ariesSync:false,petSellEggs:[],petSellPerSession:0,teamBuilder:false,autoTeams:false,hatchTeamKey:'',sellTeamKey:'',petSellTeamKey:'',idleTeamKey:'',ariesManagedTeams:[],seedSpecies:'',eggPlaceMode:'all',eggPlaceAllowed:[],eggHatchMode:'all',eggHatchAllowed:[],hungerPercent:30,foodMaxValue:1000,troughItems:5,toolReserve:2,waterMinSeconds:600,keepValue:0,keepSpecies:[],minHarvestSize:0,minHarvestValue:0,wantedMutations:[],pauseWeather:[],buyRules:[],teamRules:[],actionIntervalMs:900};
   const arr=v=>Array.isArray(v)?v:[],num=v=>typeof v==='number'&&Number.isFinite(v),str=v=>typeof v==='string'&&v.length>0&&v.length<120,obj=v=>v&&typeof v==='object'&&!Array.isArray(v);
   const cleanList=v=>[...new Set(arr(v).filter(str))].slice(0,40);
   const bounded=(v,f,min,max)=>num(v)?Math.min(max,Math.max(min,Math.round(v))):f;
@@ -1348,6 +1450,8 @@ function createAutomationCore(env) {
   const petAdvisor=(typeof createPetAdvisor==='function' ? createPetAdvisor : require('./pet-advisor.js').createPetAdvisor)();
   const petPolicy=(typeof createPetAutomationPolicy==='function'
     ? createPetAutomationPolicy : require('./pet-automation.js').createPetAutomationPolicy)();
+  const Ghost=typeof createGhostCapture==='function'?createGhostCapture:require('./ghost-capture.js').createGhostCapture;
+  const ghosts=Ghost();let lastGhostAt=-Infinity;
   const counts=Object.fromEntries(Object.keys(names).map(k=>[k,0])),reasons={},outcomes={},events=[],receipts=new Map();
   const V16=typeof createV16Controller==='function'?createV16Controller:require('./v16-controller.js').createV16Controller;
   const v16=V16({...env,config:()=>config,catalogs:()=>catalogs,rawSend:env.send});
@@ -1549,6 +1653,12 @@ function createAutomationCore(env) {
     return job('petSell','sellpet:'+pet.id,pet.id+':'+pet.targetScale,
       {type:'SellPet',itemId:pet.id},n=>!arr(n.inventory?.items).some(i=>i?.id===pet.id),600000);
   }
+  function planGhost(s){
+    const p=ghosts.propose(s);reasons.ghostCapture=p.why;
+    if(!p.command||now()-lastGhostAt<10000)return null;
+    const j=job('ghostCapture','ghost:'+p.command.ghostInstanceId,p.command.ghostInstanceId,p.command,n=>ghosts.confirmed(p,n),10000);
+    if(j)j.ghostPlan=p;return j;
+  }
   function planAriesSync(s) {
     const service=env.ariesService?.()||null;
     const report=petAdvisor.analyze(s,catalogs,'afk');
@@ -1590,7 +1700,7 @@ function createAutomationCore(env) {
       if(j)j.purchase={key:budget.key,token,price,coins:s.own.coinsCount,shop:r.shop,restockId:shop.restockId,id:r.id,beforeCount:purchased||0};return j;
     }return null;
   }
-  const planners={favorite:planFavorite,journal:planJournal,feed:planFeed,trough:planTrough,claims:planClaims,hatch:planHatch,plant:planPlant,eggs:planEggs,water:planWater,storage:planStorage,teams:planTeams,buy:planBuy,petSell:planPetSell,ariesSync:planAriesSync};
+  const planners={favorite:planFavorite,journal:planJournal,feed:planFeed,trough:planTrough,claims:planClaims,hatch:planHatch,plant:planPlant,eggs:planEggs,water:planWater,storage:planStorage,teams:planTeams,buy:planBuy,petSell:planPetSell,ariesSync:planAriesSync,ghostCapture:planGhost};
   function candidates(s){const output=[];for(const [module,plan]of Object.entries(planners)){
     // Releasing stale AUTO favorites is housekeeping for Crop Auto-Sell even
     // when new automatic favorite creation was switched off.
@@ -1603,7 +1713,7 @@ function createAutomationCore(env) {
     if(!env.running()||!config.enabled)return false;
     const fresh=snapshot();if(!fresh||fresh.actor!==s.actor||fresh.generation!==s.generation)return false;
     const latest=planners[candidate.module](fresh);if(!latest||latest.key!==candidate.key||JSON.stringify(latest.command)!==JSON.stringify(candidate.command))return false;
-    const record={key:latest.key,kind:latest.module,fp:latest.fp,status:'pending',until:latest.module==='favorite'?Number.MAX_SAFE_INTEGER:now()+600000,after:now()+latest.cooldown};
+    const record={key:latest.key,kind:latest.module,fp:latest.fp,status:'pending',until:['favorite','petSell','ghostCapture'].includes(latest.module)?Number.MAX_SAFE_INTEGER:now()+600000,after:now()+latest.cooldown};
     receipts.set(latest.key,record);
     if(!persistReceipts()){receipts.delete(latest.key);reasons[latest.module]='Speicher voll – Aktion gesperrt';return false;}
     if(latest.purchase){const b=ledger(fresh);if(!b)return false;const p=latest.purchase;if(b.key!==p.key||b.data.inflight||fresh.own.coinsCount<p.price)return false;b.data.spent+=p.price;b.data.counts[p.token]=(b.data.counts[p.token]||0)+1;b.data.inflight={shop:p.shop,restockId:p.restockId,id:p.id,beforeCount:p.beforeCount,coinsBefore:fresh.own.coinsCount,price:p.price};if(!write(b.key,b.data)){reasons.buy='Kaufstatus nicht speicherbar – Kauf pausiert';return false;}}
@@ -1615,19 +1725,21 @@ function createAutomationCore(env) {
     if(latest.favoriteOp==='clear'&&!updateMark(fresh,{id:latest.favoriteId},'clearing')){
       receipts.delete(latest.key);persistReceipts();reasons.favorite='Freigabeprotokoll nicht speicherbar';return false;
     }
-    lastActionAt=now();lastModule=latest.module;
+    lastActionAt=now();lastModule=latest.module;if(latest.module==='ghostCapture')lastGhostAt=now();
     try{const response=latest.module==='ariesSync' 
       ? await env.updateAriesTeam?.(latest.ariesPlan)
       : await v16.send(latest.command,{validate:n=>{
         if(!config[latest.module]&&!(latest.module==='favorite'&&latest.favoriteOp==='clear'&&config.cropSell))return false;
-        if(!['HatchEgg','SellPet'].includes(latest.command.type)&&
+        if(latest.module==='ghostCapture')return JSON.stringify(ghosts.propose(n).command)===JSON.stringify(latest.command);
+        if(!['HatchEgg','SellPet','PhotographGhost'].includes(latest.command.type)&&
            !(latest.command.type==='MoveItem'&&latest.command.from==='PetHutch'))return true;
         const held=receipts.get(latest.key);receipts.delete(latest.key);
         try{const check=planners[latest.module](n);return !!check&&check.key===latest.key;}
         finally{if(held)receipts.set(latest.key,held);}
       }});
       if(response?.ok!==true)throw new Error('Aktion nicht bestätigt');
-      counts[latest.module]++;record.status='confirmed';record.until=latest.module==='favorite'?Number.MAX_SAFE_INTEGER:now()+600000;event(latest.module,'Bestätigt');reasons[latest.module]='Bestätigt; warte auf Zustandsänderung';if(latest.module==='favorite'){
+      if(latest.ghostPlan&&!ghosts.confirmed(latest.ghostPlan,snapshot()))throw new Error('Ghost-Fang noch nicht im Server-State bestätigt');
+      counts[latest.module]++;record.status='confirmed';record.until=['favorite','petSell','ghostCapture'].includes(latest.module)?Number.MAX_SAFE_INTEGER:now()+600000;event(latest.module,'Bestätigt');reasons[latest.module]='Bestätigt; warte auf Zustandsänderung';if(latest.module==='favorite'){
         record.after=now()+600000;
         if(latest.favoriteOp==='set'){
           // Server acknowledged the toggle. Only this mark can later be
@@ -1643,10 +1755,11 @@ function createAutomationCore(env) {
           }
         }
       }
-      if(latest.effect&&latest.module!=='favorite'){const updated=snapshot();if(updated&&latest.effect(updated))record.until=Math.max(record.after,now()+500);}}
+      if(latest.effect&&!['favorite','petSell','ghostCapture'].includes(latest.module)){const updated=snapshot();if(updated&&latest.effect(updated))record.until=Math.max(record.after,now()+500);}}
     catch(error){
       if(latest.favoriteOp==='set')updateMark(fresh,{id:latest.favoriteId},'uncertain');
-      record.status='uncertain';record.until=latest.module==='favorite'?Number.MAX_SAFE_INTEGER:now()+600000;
+      if(error?.notSent===true||error?.definite===true&&latest.module==='petSell'){receipts.delete(latest.key);}
+      record.status='uncertain';record.until=['favorite','petSell','ghostCapture'].includes(latest.module)?Number.MAX_SAFE_INTEGER:now()+600000;
       reasons[latest.module]=String(error?.message||'Aktion nicht bestätigt').slice(0,150);
       event(latest.module,reasons[latest.module]);
     }
@@ -1995,7 +2108,7 @@ function mountAutomationUI(parent, engine, document) {
       }),card);ariesManagedList.appendChild(card);
     }
   }
-  const quests=section('Journal & tägliche Quests');check('Neue Journalvarianten fotografieren','journal',quests);check('Fertige Belohnungen abholen','claims',quests);
+  const quests=section('Journal & tägliche Quests');check('Auto Ghost Capture (optional)', 'ghostCapture',quests);explain('Standardmäßig aus. Benötigt gehaltene Kamera, bestätigte Nacht und aktuelle sichtbare Ghost-Instanz. Fehlende Spieldaten werden im Status angezeigt; alte IDs werden nie verwendet.',quests);check('Neue Journalvarianten fotografieren','journal',quests);check('Fertige Belohnungen abholen','claims',quests);
   const qnote=document.createElement('small');qnote.textContent='Camera benötigt. Questbelohnungen werden nicht teilweise verworfen. Quests werden nicht blind durch Einkäufe oder Umgraben erzwungen.';quests.appendChild(qnote);
   const teams=section('Wetterabhängige Petteams');check('Vorhandene Teams wechseln','teams',teams);
   const weatherInput=document.createElement('select');weatherInput.style.cssText=style;weatherInput.dataset.mgChoice='teamWeather';row('Bei diesem Wetter',weatherInput,teams).classList.add('mg-wide-choice');
@@ -2569,7 +2682,7 @@ function mountFieldGrid(container, plan, onChange) {
   }
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-  const VERSION = "16.3.1";
+  const VERSION = "16.3.2";
   const UPDATE_URL = "https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js";
   const NUMBER_FIELDS = Object.freeze({
     sellThreshold: { min: 5, max: 200, step: 1 },
@@ -2788,7 +2901,7 @@ function mountFieldGrid(container, plan, onChange) {
     bridge.game = full.child?.data || null;
     bridge.actor = own ? id : null;
     bridge.heldId = typeof own?.heldItem === 'string' ? own.heldItem :
-      own?.heldItem?.id || own?.heldItem?.toolId || own?.heldItem?.species || '';
+      own?.heldItem?.itemId || own?.heldItem?.id || own?.heldItem?.toolId || own?.heldItem?.species || '';
     bridge.garden = own?.data?.garden?.tileObjects || null;
     bridge.inventory = own?.data?.inventory || null;
     if (bridge.garden && bridge.inventory) bridge.lastSnapshotAt = Date.now();
@@ -3111,18 +3224,32 @@ function mountFieldGrid(container, plan, onChange) {
       const sentAt = performance.now();
       let finished = false;
       let timeout, observeTimer, ack=null;
-      const observed=['SellPet','SavePetTeam','ApplyPetTeam'].includes(command.type);
+      const retrieving=command.type==='MoveItem'&&command.from==='PetHutch'&&command.to==='inventory';
+      const photographing=command.type==='PhotographGhost';
+      const observed=retrieving||photographing||['SellPet','SavePetTeam','ApplyPetTeam'].includes(command.type);
+      const catchBefore=bridge.game?.ghostCatches?.[command.ghostIndex]?.lastCaughtAtMs??null;
       const actorAtSend=bridge.actor, revisionAtSend=bridge.revision||0;
       function verifyState(){
         if(!observed||finished)return false;
         if(bridge.socket!==ws||bridge.generation!==generation||bridge.actor!==actorAtSend){cancel();return false;}
         if((bridge.revision||0)<=revisionAtSend)return false;
         const own=bridge.own;
+        if(bridge.inventory?.storages?.some(st=>!st||!Array.isArray(st.items)))return false;
         if(!own||!Array.isArray(own.petSlots)||!Array.isArray(own.petTeams)||!Array.isArray(bridge.inventory?.items)||!Array.isArray(bridge.inventory?.storages))return false;
         const norm=v=>String(v||'').toLowerCase();
         const canon=ids=>ids.map(norm).sort().join('|');
         let matches=false;
-        if(command.type==='SellPet'){
+        if(photographing){
+          const c=bridge.game?.ghostCatches?.[command.ghostIndex];
+          const owner=bridge.lastFullState?.data?.players?.find(p=>p.id===bridge.playerId)?.databaseUserId;
+          matches=ack?.ok===true&&ack.commandType==='PhotographGhost'&&Number.isFinite(c?.lastCaughtAtMs)&&
+            (catchBefore===null||c.lastCaughtAtMs>catchBefore)&&Array.isArray(c.photographerIds)&&
+            c.photographerIds.some(id=>id===actorAtSend||!!owner&&id===owner);
+        }else if(retrieving){
+          const bag=bridge.inventory.items.filter(p=>norm(p?.id)===norm(command.itemId)&&p.itemType==='Pet');
+          const stored=bridge.inventory.storages.some(st=>!Array.isArray(st?.items)||st.items.some(p=>norm(p?.id)===norm(command.itemId)));
+          matches=bag.length===1&&!stored;
+        }else if(command.type==='SellPet'){
           const all=[...own.petSlots.map(p=>p.slot||p),...bridge.inventory.items,...bridge.inventory.storages.flatMap(s=>Array.isArray(s.items)?s.items:[])];
           matches=!all.some(p=>norm(p?.id)===norm(command.itemId));
         }else if(command.type==='SavePetTeam'){
@@ -3146,7 +3273,7 @@ function mountFieldGrid(container, plan, onChange) {
         if (finished) return;
         finished = true;
         clearTimeout(timeout);
-        clearTimeout(observeTimer);
+        clearInterval(observeTimer);
         ws.removeEventListener("message", onMessage);
         if (bridge.cancelPending === cancel) bridge.cancelPending = null;
         if (command.type === "HarvestCrop" &&
@@ -4025,6 +4152,7 @@ function mountFieldGrid(container, plan, onChange) {
       if (!getSocket() || !bridge.garden || !bridge.own || !bridge.game || !bridge.actor) return null;
       return {actor:bridge.actor,own:bridge.own,game:bridge.game,garden:bridge.garden,
         inventory:bridge.inventory,generation:bridge.generation,serverNow:serverNow(),
+        ghost:readNativeGhostState(window),
         ownerKey:bridge.lastFullState?.data?.players?.find(p=>p.id===bridge.playerId)?.databaseUserId||bridge.actor,heldId:bridge.heldId,selected:[...selectedSlots()].sort((a,b)=>a-b),fieldModes:fieldPlan.snapshot()};
     },
     loadCatalogs: loadNativeAutomationCatalogs,
@@ -4094,5 +4222,5 @@ function mountFieldGrid(container, plan, onChange) {
   if (!firstV16 && readValue(sessionStorage, KEYS.resume) === "1") {
     start({ auto: true });
   }
-  console.log("✅ Magic Garden AutoFarm V16.3.1 geladen (Automationszentrale, ohne Fremdskripte).");
+  console.log("✅ Magic Garden AutoFarm V16.3.2 geladen (Automationszentrale, ohne Fremdskripte).");
 })();

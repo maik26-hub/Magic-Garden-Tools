@@ -90,6 +90,7 @@ function createHarness({ withCanvas = false, resumeOnLoad = false, legacyPrefere
     AbortController,
     setTimeout: (fn, ms) => { tasks.push({ fn, ms }); return tasks.length; },
     clearTimeout() {},
+    clearInterval() {},
     setInterval: (fn, ms) => { tasks.push({ fn, ms }); return tasks.length; },
     console: { log() {}, info() {}, warn() {}, error() {}, table() {} },
     fetch: async (url, options) => {
@@ -104,7 +105,7 @@ function createHarness({ withCanvas = false, resumeOnLoad = false, legacyPrefere
     ? source.replace('  // ===== Adaptives Tempo:',
         '  window.__findReadyCropForTest = findReadyCrop;\n  // ===== Adaptives Tempo:')
     : source;
-  vm.runInNewContext(executable, context, { timeout: 3000 });
+  vm.runInNewContext(executable.replace('  // ===== Konsole =====','  window.__sendForTest=sendCommand; window.__bridgeForTest=bridge;\n  // ===== Konsole ====='), context, { timeout: 3000 });
   const api = window.MGAutoFarmV13;
   assert.ok(api);
 
@@ -399,10 +400,10 @@ test('official V14 preserves the original V13 update channel', () => {
 
 test('automatic version check accepts only a newer official version with fallback fetch', async () => {
   const h = createHarness();
-  h.setRemoteSource(source.replace('// @version      16.3.1',
-    '// @version      16.3.2'));
+  h.setRemoteSource(source.replace('// @version      16.3.2',
+    '// @version      16.3.3'));
   const result = await h.api.checkForUpdate(true);
-  assert.equal(result.newer, '16.3.2');
+  assert.equal(result.newer, '16.3.3');
   assert.match(result.status, /Update verfuegbar/);
   assert.ok(result.url.endsWith('/MagicGardenAutoFarm.user.js'));
   assert.equal(h.fetchCalls.length, 1);
@@ -416,7 +417,7 @@ test('version check correctly reports already-current release', async () => {
   const h = createHarness();
   const result = await h.api.checkForUpdate(true);
   assert.equal(result.newer, null);
-  assert.equal(result.status, 'Aktuell: V16.3.1');
+  assert.equal(result.status, 'Aktuell: V16.3.2');
 });
 
 test('manual update check rejects unrelated beta script even with higher version', async () => {
@@ -443,7 +444,7 @@ test('version check handles a blocked network request without false upgrades', a
 
 test('version check reports remote older without downgrade', async () => {
   const h = createHarness();
-  h.setRemoteSource(source.replace('// @version      16.3.1',
+  h.setRemoteSource(source.replace('// @version      16.3.2',
     '// @version      14.0.3'));
   const result = await h.api.checkForUpdate(true);
   assert.equal(result.newer, null);
@@ -465,7 +466,7 @@ test('same Tampermonkey identity as V13.2.3 upgrades the existing script', () =>
   const item = key => lines.find(line => line.startsWith('// @' + key + ' '))?.replace(/^\/\/ @\S+\s+/, '').trim();
   assert.equal(item('name'), 'Magic Garden AutoFarm');
   assert.equal(item('namespace'), 'mg-autofarm-local');
-  assert.equal(item('version'), '16.3.1');
+  assert.equal(item('version'), '16.3.2');
   const original = 'https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js';
   assert.equal(item('updateURL'), original);
   assert.equal(item('downloadURL'), original);
@@ -494,7 +495,7 @@ test('V13 preferences and Auto-Resume survive the V14 upgrade', async () => {
 
 test('V13 legacy checkForUpdate metadata sees V14 release as newer', () => {
   const candidate = source.match(/^\s*\/\/\s*@version\s+(\d+\.\d+\.\d+)\b/m)?.[1];
-  assert.equal(candidate, '16.3.1');
+  assert.equal(candidate, '16.3.2');
   const originalV13 = '13.2.3';
   const compare = (a, b) => {
     const left = a.split('.').map(Number), right = b.split('.').map(Number);
@@ -516,4 +517,22 @@ test('previously protected Gold grow slot becomes harvestable immediately when p
  assert.ok(ripe);assert.equal(ripe.tile,0);
  assert.equal(h.api.state.protectedCooldownKeys.has('0:0'),false);
  assert.equal(h.api.state.cooldowns.has('0:0'),false);
+});
+test('real command pipeline waits beyond MoveItem ACK for exact inventory/Hutch transition',async()=>{
+ const h=createHarness();h.receiveOwnState({});
+ const b=h.window.__bridgeForTest;
+ b.own.petSlots=[];b.own.petTeams=[];b.inventory.storages=[{decorId:'PetHutch',items:[{id:'pet',itemType:'Pet'}]}];
+ let done=false;const result=h.window.__sendForTest({type:'MoveItem',from:'PetHutch',to:'inventory',itemId:'pet',quantity:1}).then(()=>done=true);
+ const sent=h.ws.sent.at(-1);
+ h.ws.emit('message',{type:'QuinoaCommandResult',requestId:sent.requestId,commandType:'MoveItem',ok:true});await flush();assert.equal(done,false);
+ b.inventory.items=[{id:'pet',itemType:'Pet'}];b.revision++;h.tasks.filter(t=>t.ms===100).at(-1).fn();await flush();assert.equal(done,false);
+ b.inventory.storages[0].items=[];b.revision++;h.tasks.filter(t=>t.ms===100).at(-1).fn();await result;assert.equal(done,true);
+});
+test('real Ghost pipeline requires both own changed server catch and matching successful result',async()=>{
+ const h=createHarness();h.receiveOwnState({});const b=h.window.__bridgeForTest;
+ b.own.petSlots=[];b.own.petTeams=[];b.inventory.storages=[];b.game.ghostCatches={};
+ let done=false;const result=h.window.__sendForTest({type:'PhotographGhost',ghostIndex:2,ghostInstanceId:'current'}).then(()=>done=true);
+ const sent=h.ws.sent.at(-1);b.game.ghostCatches[2]={lastCaughtAtMs:123,photographerIds:['self-player']};b.revision++;
+ h.tasks.filter(t=>t.ms===100).at(-1).fn();await flush();assert.equal(done,false);
+ h.ws.emit('message',{type:'QuinoaCommandResult',requestId:sent.requestId,commandType:'PhotographGhost',ok:true});await result;assert.equal(done,true);
 });
