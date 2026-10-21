@@ -29,7 +29,7 @@ test('native reader uses current atoms and never synthesizes IDs from catches',(
  const page={__jotaiStore:{get:a=>values.get(a)},jotaiAtomCache:atoms};
  assert.equal(readNativeGhostState(page).instances.length,0);
  put('visibleGhostsAtom',[{ghostIndex:2,ghostInstanceId:'fresh',visible:true}]);
- assert.equal(readNativeGhostState(page).instances[0].ghostInstanceId,'fresh');
+ assert.equal(readNativeGhostState(page).instances.length,0); // undocumented atom rows are not authoritative
  values.set(atoms.get('visibleGhostsAtom'),[]);assert.equal(readNativeGhostState(page).instances.length,0);
 });
 const {createAutomationCore}=require('../src/automation-core.js');
@@ -59,4 +59,29 @@ test('ACK-only Ghost is uncertain and remains blocked after reload',async()=>{
 });
 test('a visibility change just before dispatch vetoes the command',async()=>{
  const h=core();h.s.ghost.instances[0].visible=false;await h.e.step();assert.equal(h.calls.length,0);
+});
+test('build 1695 reads the native renderer ghost selection rather than invented atom rows',()=>{
+ const ghost={index:2,instanceId:'native-current'};
+ const context={serverTimeMs:10000,cameraTransform:{scale:1,xPixels:0,yPixels:0},safeAreaInsets:{top:4},room:{localPlayerId:'me'}};
+ const scope={isActive:true,isWorldBuilt:true,isWorldDrawing:true,displayedRoomId:'room',context,
+  getSystem:name=>name==='ghost'?{framedGhosts:(transform,rect)=>{assert.equal(transform,context.cameraTransform);assert.equal(rect.width,100);return {kind:'ready',ghosts:[{kind:'catch',ghost}]};}}:
+   name==='cameraOverlay'?{app:{screen:{width:100,height:100}},viewfinderRect:(w,h,top)=>({x:0,y:top,width:w,height:h})}:null};
+ const values={dayNightStageAtom:'midnight',isHoldingCameraAtom:true,cameraTargetAtom:{x:1,y:2},ghostCatchesAtom:{},quinoaDevEngineAtom:{page:{rendererScope:scope}}};
+ const atoms=new Map(Object.keys(values).map(label=>[label,{debugLabel:label}]));
+ const page={jotaiAtomCache:{cache:atoms},__jotaiStore:{get:a=>values[a.debugLabel]}};
+ const result=readNativeGhostState(page);
+ assert.deepEqual(result.instances,[{ghostIndex:2,ghostInstanceId:'native-current',visible:true}]);
+ assert.equal(result.actor,'me');
+ const snapshot={...live(),roomId:'room',ghost:result};
+ assert.equal(createGhostCapture().propose(snapshot).command.ghostInstanceId,'native-current');
+ ghost.instanceId='native-new';assert.equal(readNativeGhostState(page).instances[0].ghostInstanceId,'native-new');
+ snapshot.actor='someone-else';assert.equal(createGhostCapture().propose(snapshot).command,null);snapshot.actor='me';
+ snapshot.serverNow=13000;assert.equal(createGhostCapture().propose(snapshot).command,null);
+ scope.isActive=false;assert.equal(readNativeGhostState(page).instances.length,0);scope.isActive=true;
+ scope.getSystem=name=>name==='ghost'?{framedGhosts:()=>({kind:'tooFar'})}:name==='cameraOverlay'?{app:{screen:{width:100,height:100}},viewfinderRect:()=>({x:0,y:0,width:100,height:100})}:null;
+ assert.equal(readNativeGhostState(page).instances.length,0);
+ assert.match(readNativeGhostState(page).why,/Reichweite/);
+});
+test('actual native sunset midnight and sunrise stages permit native readiness checks',()=>{
+ for(const stage of ['sunset','midnight','sunrise']){const s=live();s.ghost.stage=stage;assert.ok(createGhostCapture().propose(s).command,stage);}
 });
