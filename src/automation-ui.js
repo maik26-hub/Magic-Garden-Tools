@@ -204,7 +204,7 @@ function mountAutomationUI(parent, engine, document) {
       }),card);ariesManagedList.appendChild(card);
     }
   }
-  const quests=section('Journal & tägliche Quests');check('Neue Journalvarianten fotografieren','journal',quests);check('Fertige Belohnungen abholen','claims',quests);
+  const quests=section('Journal & tägliche Quests');check('Auto Ghost Capture (optional)', 'ghostCapture',quests);explain('Standardmäßig aus. Benötigt gehaltene Kamera, bestätigte Nacht und aktuelle sichtbare Ghost-Instanz. Fehlende Spieldaten werden im Status angezeigt; alte IDs werden nie verwendet.',quests);check('Neue Journalvarianten fotografieren','journal',quests);check('Fertige Belohnungen abholen','claims',quests);
   const qnote=document.createElement('small');qnote.textContent='Camera benötigt. Questbelohnungen werden nicht teilweise verworfen. Quests werden nicht blind durch Einkäufe oder Umgraben erzwungen.';quests.appendChild(qnote);
   const teams=section('Wetterabhängige Petteams');check('Vorhandene Teams wechseln','teams',teams);
   const weatherInput=document.createElement('select');weatherInput.style.cssText=style;weatherInput.dataset.mgChoice='teamWeather';row('Bei diesem Wetter',weatherInput,teams).classList.add('mg-wide-choice');

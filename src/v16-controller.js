@@ -54,6 +54,7 @@ function createV16Controller(env) {
     if(lc(s.heldId)===id)return 'Pet gerade ausgewählt';
     return '';
   }
+  let validatingAttempt=null;
   function salePreview(){
     const c=env.config(),s=env.snapshot();
     if(!s)return {pet:null,why:'Eigene Spieldaten fehlen',rows:[]};
@@ -61,27 +62,40 @@ function createV16Controller(env) {
     if(!arr(c.petSellEggs).length)return {pet:null,why:'Keine Ei-Gruppe zum Pet-Verkauf ausgewählt',rows:[]};
     if(!Array.isArray(s.own.petSlots)||!Array.isArray(s.own.petTeams)||!Array.isArray(s.inventory.storages))
       return {pet:null,why:'Aktive Pets, Teams oder Lagerdaten fehlen',rows:[]};
+    if(!Array.isArray(s.inventory.items)||!Array.isArray(s.inventory.favoritedItemIds)||
+      s.inventory.storages.some(st=>!st||typeof st.decorId!=='string'||!Array.isArray(st.items))||
+      s.inventory.storages.filter(st=>st.decorId==='PetHutch').length>1||
+      s.own.petTeams.some(t=>!t||!Array.isArray(t.members)||t.members.some(m=>typeof m?.petId!=='string')))
+      return {pet:null,why:'Inventar-/Hutch-/Team-Zuordnung unvollständig',rows:[]};
     const plan=refresh(true);if(!plan?.ready)return {pet:null,why:plan?.message||'Pet- und Fähigkeitenkatalog fehlen',rows:[]};
     const rows=[];let selected=null,selectedSource=null;
     const hutch=s.inventory.storages.filter(st=>st?.decorId==='PetHutch');
-    // Prefer safely redundant Hutch pets, then the weakest Max-STR bag pets.
+    // Prefer surplus bag pets, then retrieve the weakest surplus Hutch pet.
     // Inventory and Hutch are *one* owned portfolio, not independent pools.
     const candidates=[...s.inventory.items.map(p=>({raw:p,source:'Inventar'})),
       ...hutch.flatMap(st=>arr(st.items).map(p=>({raw:p,source:'Pet Hutch'})))];
     const maxById=new Map(plan.owned.map(p=>[lc(p.id),p.metrics?.max??Number.POSITIVE_INFINITY]));
-    candidates.sort((a,b)=>Number(b.source==='Pet Hutch')-Number(a.source==='Pet Hutch')||
+    candidates.sort((a,b)=>Number(a.source==='Pet Hutch')-Number(b.source==='Pet Hutch')||
       (maxById.get(lc(a.raw?.id))??Infinity)-(maxById.get(lc(b.raw?.id))??Infinity));
     const locations=new Map();
     for(const {raw} of candidates)if(raw?.itemType==='Pet'&&typeof raw.id==='string')
       locations.set(lc(raw.id),(locations.get(lc(raw.id))||0)+1);
     for(const {raw,source} of candidates){
-      const p=raw?.itemType==='Pet'?{...raw,...(raw.data||{})}:null;if(!p||typeof p.id!=='string')continue;
+      const p=raw?.itemType==='Pet'?{...raw,...(raw.data||{}),id:raw.id,itemType:raw.itemType}:null;if(!p||typeof p.id!=='string')continue;
       let why=protection(p,s,plan);
+      if(!why&&(raw.locked||raw.isLocked||raw.protected||raw.isProtected||env.protected?.({},raw)))why='Gesperrt/geschützt';
+      if(!why&&raw.data?.id&&lc(raw.data.id)!==lc(raw.id))why='Widersprüchliche Pet-ID';
+      if(!why&&(!Array.isArray(p.abilities)||!p.abilities.length||p.abilities.some(a=>typeof a!=='string')||
+        !Number.isFinite(p.xp)||!Number.isFinite(p.targetScale)))why='Pet-Metadaten unvollständig';
       if(!why&&locations.get(lc(p.id))!==1)why='Pet-ID ist mehrfach vorhanden – Verkauf gesperrt';
       if(!why&&source==='Pet Hutch'&&s.inventory.items.length>=98)
         why='Inventar fast voll – kein Platz zum Herausnehmen';
       if(!why&&!p.sourceEggId)why='Herkunftsei fehlt – wird nicht geraten';
       if(!why&&!c.petSellEggs.includes(p.sourceEggId))why='Ei-Gruppe nicht freigegeben';
+      const ledger=attempts(),attempt=ledger?.[(s.ownerKey||s.actor)+'|'+(source==='Pet Hutch'?'retrieve:':'sell:')+lc(p.id)];
+      if(!why&&!ledger)why='Pet-Aktionsprotokoll beschädigt – Verkauf gesperrt';
+      if(!why&&attempt&&validatingAttempt!==((s.ownerKey||s.actor)+'|'+(source==='Pet Hutch'?'retrieve:':'sell:')+lc(p.id))&&(attempt.state!=='rejected'||attempt.until>env.now()))
+        why=attempt.state==='rejected'?'Serverablehnung – vorsichtige Wiederholung frühestens nach 30 Sekunden':'Pet-Aktion bereits versucht; Ergebnis abwarten, kein Duplikat';
       const d=plan.decisions.find(d=>lc(d.id)===lc(p.id));
       if(!why&&d?.kind!=='surplus')why=d?.reason||'Boostvergleich unklar';
       if(!why){
@@ -99,12 +113,42 @@ function createV16Controller(env) {
       rows.length?rows[0].reason:'Keine Pets im Inventar oder Pet Hutch',rows};
   }
   const SOLD_KEY='magic_garden_v16_pet_attempts';
-  function attempts(){try{const v=JSON.parse(env.storage.getItem(SOLD_KEY)||'{}');return v&&typeof v==='object'?v:{};}catch{return {};}}
+  function attempts(){try{const v=JSON.parse(env.storage.getItem(SOLD_KEY)||'{}');return v&&typeof v==='object'&&!Array.isArray(v)?v:null;}catch{return null;}}
   function saveAttempts(v){try{env.storage.setItem(SOLD_KEY,JSON.stringify(v));return true;}catch{return false;}}
+  async function locked(fn){
+    let acquired=false;
+    try{
+      if(typeof env.withPetLock!=='function')throw Error('Pet-/Ghost-Aktion benötigt die Browser-Tabsperre');
+      const result=await env.withPetLock(()=>{acquired=true;return fn();});
+      if(!acquired)throw Error('Pet-/Ghost-Aktion läuft in anderem Tab');
+      return result;
+    }catch(e){if(!acquired)e.notSent=true;throw e;}
+  }
   async function send(command,options={}){
     const retrieving=command.type==='MoveItem'&&command.from==='PetHutch'&&
       command.to==='inventory'&&command.quantity===1&&typeof command.itemId==='string';
     const selling=command.type==='SellPet';
+    if(command.type==='PhotographGhost'){
+      return locked(async()=>{
+        const Factory=typeof createGhostCapture==='function'?createGhostCapture:require('./ghost-capture.js').createGhostCapture;
+        const g=Factory(),p=g.propose(env.snapshot());
+        if(!env.config().ghostCapture||!p.command||JSON.stringify(p.command)!==JSON.stringify(command))throw Error(p.why||'Ghost-Aktion nicht freigegeben');
+        const key=(p.ownerKey||p.actor)+'|ghost:'+command.ghostInstanceId,records=attempts();
+        if(!records||records[key])throw Error('Ghost-Instanz bereits versucht oder Protokoll unklar');
+        const rateKey=(p.ownerKey||p.actor)+'|ghost-rate';
+        if(records[rateKey]?.until>env.now()){const e=Error('Ghost-Rate-Limit: mindestens zehn Sekunden Abstand');e.notSent=true;throw e;}
+        records[rateKey]={until:env.now()+10000};
+        records[key]={state:'pending',until:Number.MAX_SAFE_INTEGER};
+        if(!saveAttempts(records))throw Error('Ghost-Aktionsschutz nicht speicherbar');
+        const reply=await actions.execute(command,{validate:s=>{
+          const fresh=g.propose(s);
+          return env.config().ghostCapture&&fresh.actor===p.actor&&fresh.generation===p.generation&&
+            JSON.stringify(fresh.command)===JSON.stringify(command)&&(!options.validate||options.validate(s));
+        }});
+        if(!reply?.ok||!g.confirmed(p,env.snapshot()))throw Error('Ghost-Fang noch nicht im Server-State bestätigt');
+        return reply;
+      });
+    }
     if(command.type==='MoveItem'&&!retrieving&&command.from==='PetHutch')
       throw Error('Nicht freigegebener Pet-Hutch-Transfer');
     const execute=async()=>{
@@ -115,22 +159,25 @@ function createV16Controller(env) {
            (retrieving&&p.source!=='Pet Hutch')||(selling&&p.source!=='Inventar'))
           throw Error('Pet-Aktion blockiert: '+p.why);
         pet=p.pet;attemptKey=(epoch.ownerKey||epoch.actor)+'|'+(retrieving?'retrieve:':'sell:')+lc(pet.id);
-        const records=attempts(),old=records[attemptKey];
-        if(old&&old.until>env.now())throw Error(retrieving?'Hutch-Entnahme noch unbestätigt; kein erneuter Versuch':
+        const records=attempts();if(!records)throw Error('Pet-Aktionsprotokoll beschädigt – Verkauf gesperrt');
+        const old=records[attemptKey];
+        if(old&&(old.state!=='rejected'||old.until>env.now()))throw Error(retrieving?'Hutch-Entnahme noch unbestätigt; kein erneuter Versuch':
           'Pet-Verkauf noch unbestätigt; kein erneuter Versuch');
-        records[attemptKey]={until:env.now()+600000,state:'pending'};
+        records[attemptKey]={until:Number.MAX_SAFE_INTEGER,state:'pending',tries:(old?.tries||0)+1};
         if(!saveAttempts(records))throw Error('Pet-Aktionsschutz konnte nicht gespeichert werden');
       }
       try{
         const reply=await actions.execute(command,{validate:s=>{
+          validatingAttempt=attemptKey;try{
           if(options.validate&&!options.validate(s))return false;
           if(pet){const check=salePreview();return check.pet?.id===pet.id&&
             check.source===(retrieving?'Pet Hutch':'Inventar');}
           return true;
+          }finally{validatingAttempt=null;}
         }});
         if(pet){
           const now=env.snapshot();
-          if(!now||now.actor!==epoch.actor||now.generation!==epoch.generation)
+          if(!now||now.actor!==epoch.actor||now.generation!==epoch.generation||now.ownerKey!==epoch.ownerKey)
             throw Error('Verbindung während Pet-Aktion geändert');
           const inBag=arr(now.inventory?.items).some(x=>lc(x.id)===lc(pet.id)&&x.itemType==='Pet');
           const inHutch=arr(now.inventory?.storages).some(st=>st.decorId==='PetHutch'&&
@@ -141,15 +188,22 @@ function createV16Controller(env) {
             if(!inBag||inHutch)throw Error('Hutch-Entnahme noch nicht im eigenen Inventar bestätigt');
           }else if(builder.pets(now,env.catalogs()).some(p=>lc(p.id)===lc(pet.id))||!reply?.ok)
             throw Error('Verkauf noch nicht im eigenen Spielzustand bestätigt');
-          const records=attempts();records[attemptKey]={until:env.now()+86400000,state:'observed'};saveAttempts(records);
+          const records=attempts();records[attemptKey]={until:Number.MAX_SAFE_INTEGER,state:'observed'};saveAttempts(records);
         }
         lastWork=env.now();
         return retrieving?{ok:true,observed:true}:reply;
-      }catch(e){notice=e?.message||'Aktion fehlgeschlagen';throw e;}
+       }catch(e){
+        // Only an explicit server rejection proves that no action happened.
+        // Timeouts and disconnects stay blocked indefinitely, including reloads.
+        if(attemptKey&&e?.definite===true){
+          const records=attempts(),r=records?.[attemptKey];
+          if(r&&r.tries<3){r.until=env.now()+30000;r.state='rejected';saveAttempts(records);}
+        }
+        notice=e?.message||'Aktion fehlgeschlagen';throw e;
+      }
     };
     if(retrieving||selling){
-      if(typeof env.withPetLock!=='function')throw Error('Pet-Aktion benötigt die Browser-Tabsperre');
-      return env.withPetLock(execute);
+      return locked(execute);
     }
     return execute();
   }

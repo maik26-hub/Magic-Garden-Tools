@@ -4,8 +4,8 @@ function createAutomationCore(env) {
   'use strict';
   const clone=value=>typeof structuredClone==='function'?structuredClone(value):JSON.parse(JSON.stringify(value));
   const KEY='magic_garden_automation_v15', LEDGER='magic_garden_purchase_budget_v15', RECEIPTS='magic_garden_action_receipts_v15', AUTO_MARKS='magic_garden_own_crop_favorites_v16';
-  const names={favorite:'Wertschutz / Favoriten',journal:'Journal',feed:'Pets füttern',trough:'Futtertrog',claims:'Quest-Belohnungen',hatch:'Eier ausbrüten',plant:'Nachpflanzen',eggs:'Eier nachlegen',water:'Gießen',storage:'Lager',teams:'Wetter-Petteams',buy:'Shop-Einkauf',petSell:'Pet Auto-Sell',ariesSync:'Aries-Teams aktualisieren'};
-  const defaults={enabled:false,harvest:true,cropSell:true,favorite:false,journal:false,feed:false,trough:false,claims:false,hatch:false,plant:false,eggs:false,water:false,storage:false,teams:false,buy:false,petSell:false,ariesSync:false,petSellEggs:[],petSellPerSession:0,teamBuilder:false,autoTeams:false,hatchTeamKey:'',sellTeamKey:'',petSellTeamKey:'',idleTeamKey:'',ariesManagedTeams:[],seedSpecies:'',eggPlaceMode:'all',eggPlaceAllowed:[],eggHatchMode:'all',eggHatchAllowed:[],hungerPercent:30,foodMaxValue:1000,troughItems:5,toolReserve:2,waterMinSeconds:600,keepValue:0,keepSpecies:[],minHarvestSize:0,minHarvestValue:0,wantedMutations:[],pauseWeather:[],buyRules:[],teamRules:[],actionIntervalMs:900};
+  const names={favorite:'Wertschutz / Favoriten',journal:'Journal',feed:'Pets füttern',trough:'Futtertrog',claims:'Quest-Belohnungen',hatch:'Eier ausbrüten',plant:'Nachpflanzen',eggs:'Eier nachlegen',water:'Gießen',storage:'Lager',teams:'Wetter-Petteams',buy:'Shop-Einkauf',petSell:'Pet Auto-Sell',ghostCapture:'Auto Ghost Capture',ariesSync:'Aries-Teams aktualisieren'};
+  const defaults={enabled:false,harvest:true,cropSell:true,favorite:false,journal:false,feed:false,trough:false,claims:false,hatch:false,plant:false,eggs:false,water:false,storage:false,teams:false,buy:false,petSell:false,ghostCapture:false,ariesSync:false,petSellEggs:[],petSellPerSession:0,teamBuilder:false,autoTeams:false,hatchTeamKey:'',sellTeamKey:'',petSellTeamKey:'',idleTeamKey:'',ariesManagedTeams:[],seedSpecies:'',eggPlaceMode:'all',eggPlaceAllowed:[],eggHatchMode:'all',eggHatchAllowed:[],hungerPercent:30,foodMaxValue:1000,troughItems:5,toolReserve:2,waterMinSeconds:600,keepValue:0,keepSpecies:[],minHarvestSize:0,minHarvestValue:0,wantedMutations:[],pauseWeather:[],buyRules:[],teamRules:[],actionIntervalMs:900};
   const arr=v=>Array.isArray(v)?v:[],num=v=>typeof v==='number'&&Number.isFinite(v),str=v=>typeof v==='string'&&v.length>0&&v.length<120,obj=v=>v&&typeof v==='object'&&!Array.isArray(v);
   const cleanList=v=>[...new Set(arr(v).filter(str))].slice(0,40);
   const bounded=(v,f,min,max)=>num(v)?Math.min(max,Math.max(min,Math.round(v))):f;
@@ -48,6 +48,8 @@ function createAutomationCore(env) {
   const petAdvisor=(typeof createPetAdvisor==='function' ? createPetAdvisor : require('./pet-advisor.js').createPetAdvisor)();
   const petPolicy=(typeof createPetAutomationPolicy==='function'
     ? createPetAutomationPolicy : require('./pet-automation.js').createPetAutomationPolicy)();
+  const Ghost=typeof createGhostCapture==='function'?createGhostCapture:require('./ghost-capture.js').createGhostCapture;
+  const ghosts=Ghost();let lastGhostAt=-Infinity;
   const counts=Object.fromEntries(Object.keys(names).map(k=>[k,0])),reasons={},outcomes={},events=[],receipts=new Map();
   const V16=typeof createV16Controller==='function'?createV16Controller:require('./v16-controller.js').createV16Controller;
   const v16=V16({...env,config:()=>config,catalogs:()=>catalogs,rawSend:env.send});
@@ -249,6 +251,12 @@ function createAutomationCore(env) {
     return job('petSell','sellpet:'+pet.id,pet.id+':'+pet.targetScale,
       {type:'SellPet',itemId:pet.id},n=>!arr(n.inventory?.items).some(i=>i?.id===pet.id),600000);
   }
+  function planGhost(s){
+    const p=ghosts.propose(s);reasons.ghostCapture=p.why;
+    if(!p.command||now()-lastGhostAt<10000)return null;
+    const j=job('ghostCapture','ghost:'+p.command.ghostInstanceId,p.command.ghostInstanceId,p.command,n=>ghosts.confirmed(p,n),10000);
+    if(j)j.ghostPlan=p;return j;
+  }
   function planAriesSync(s) {
     const service=env.ariesService?.()||null;
     const report=petAdvisor.analyze(s,catalogs,'afk');
@@ -290,7 +298,7 @@ function createAutomationCore(env) {
       if(j)j.purchase={key:budget.key,token,price,coins:s.own.coinsCount,shop:r.shop,restockId:shop.restockId,id:r.id,beforeCount:purchased||0};return j;
     }return null;
   }
-  const planners={favorite:planFavorite,journal:planJournal,feed:planFeed,trough:planTrough,claims:planClaims,hatch:planHatch,plant:planPlant,eggs:planEggs,water:planWater,storage:planStorage,teams:planTeams,buy:planBuy,petSell:planPetSell,ariesSync:planAriesSync};
+  const planners={favorite:planFavorite,journal:planJournal,feed:planFeed,trough:planTrough,claims:planClaims,hatch:planHatch,plant:planPlant,eggs:planEggs,water:planWater,storage:planStorage,teams:planTeams,buy:planBuy,petSell:planPetSell,ariesSync:planAriesSync,ghostCapture:planGhost};
   function candidates(s){const output=[];for(const [module,plan]of Object.entries(planners)){
     // Releasing stale AUTO favorites is housekeeping for Crop Auto-Sell even
     // when new automatic favorite creation was switched off.
@@ -303,7 +311,7 @@ function createAutomationCore(env) {
     if(!env.running()||!config.enabled)return false;
     const fresh=snapshot();if(!fresh||fresh.actor!==s.actor||fresh.generation!==s.generation)return false;
     const latest=planners[candidate.module](fresh);if(!latest||latest.key!==candidate.key||JSON.stringify(latest.command)!==JSON.stringify(candidate.command))return false;
-    const record={key:latest.key,kind:latest.module,fp:latest.fp,status:'pending',until:latest.module==='favorite'?Number.MAX_SAFE_INTEGER:now()+600000,after:now()+latest.cooldown};
+    const record={key:latest.key,kind:latest.module,fp:latest.fp,status:'pending',until:['favorite','petSell','ghostCapture'].includes(latest.module)?Number.MAX_SAFE_INTEGER:now()+600000,after:now()+latest.cooldown};
     receipts.set(latest.key,record);
     if(!persistReceipts()){receipts.delete(latest.key);reasons[latest.module]='Speicher voll – Aktion gesperrt';return false;}
     if(latest.purchase){const b=ledger(fresh);if(!b)return false;const p=latest.purchase;if(b.key!==p.key||b.data.inflight||fresh.own.coinsCount<p.price)return false;b.data.spent+=p.price;b.data.counts[p.token]=(b.data.counts[p.token]||0)+1;b.data.inflight={shop:p.shop,restockId:p.restockId,id:p.id,beforeCount:p.beforeCount,coinsBefore:fresh.own.coinsCount,price:p.price};if(!write(b.key,b.data)){reasons.buy='Kaufstatus nicht speicherbar – Kauf pausiert';return false;}}
@@ -315,19 +323,21 @@ function createAutomationCore(env) {
     if(latest.favoriteOp==='clear'&&!updateMark(fresh,{id:latest.favoriteId},'clearing')){
       receipts.delete(latest.key);persistReceipts();reasons.favorite='Freigabeprotokoll nicht speicherbar';return false;
     }
-    lastActionAt=now();lastModule=latest.module;
+    lastActionAt=now();lastModule=latest.module;if(latest.module==='ghostCapture')lastGhostAt=now();
     try{const response=latest.module==='ariesSync' 
       ? await env.updateAriesTeam?.(latest.ariesPlan)
       : await v16.send(latest.command,{validate:n=>{
         if(!config[latest.module]&&!(latest.module==='favorite'&&latest.favoriteOp==='clear'&&config.cropSell))return false;
-        if(!['HatchEgg','SellPet'].includes(latest.command.type)&&
+        if(latest.module==='ghostCapture')return JSON.stringify(ghosts.propose(n).command)===JSON.stringify(latest.command);
+        if(!['HatchEgg','SellPet','PhotographGhost'].includes(latest.command.type)&&
            !(latest.command.type==='MoveItem'&&latest.command.from==='PetHutch'))return true;
         const held=receipts.get(latest.key);receipts.delete(latest.key);
         try{const check=planners[latest.module](n);return !!check&&check.key===latest.key;}
         finally{if(held)receipts.set(latest.key,held);}
       }});
       if(response?.ok!==true)throw new Error('Aktion nicht bestätigt');
-      counts[latest.module]++;record.status='confirmed';record.until=latest.module==='favorite'?Number.MAX_SAFE_INTEGER:now()+600000;event(latest.module,'Bestätigt');reasons[latest.module]='Bestätigt; warte auf Zustandsänderung';if(latest.module==='favorite'){
+      if(latest.ghostPlan&&!ghosts.confirmed(latest.ghostPlan,snapshot()))throw new Error('Ghost-Fang noch nicht im Server-State bestätigt');
+      counts[latest.module]++;record.status='confirmed';record.until=['favorite','petSell','ghostCapture'].includes(latest.module)?Number.MAX_SAFE_INTEGER:now()+600000;event(latest.module,'Bestätigt');reasons[latest.module]='Bestätigt; warte auf Zustandsänderung';if(latest.module==='favorite'){
         record.after=now()+600000;
         if(latest.favoriteOp==='set'){
           // Server acknowledged the toggle. Only this mark can later be
@@ -343,10 +353,11 @@ function createAutomationCore(env) {
           }
         }
       }
-      if(latest.effect&&latest.module!=='favorite'){const updated=snapshot();if(updated&&latest.effect(updated))record.until=Math.max(record.after,now()+500);}}
+      if(latest.effect&&!['favorite','petSell','ghostCapture'].includes(latest.module)){const updated=snapshot();if(updated&&latest.effect(updated))record.until=Math.max(record.after,now()+500);}}
     catch(error){
       if(latest.favoriteOp==='set')updateMark(fresh,{id:latest.favoriteId},'uncertain');
-      record.status='uncertain';record.until=latest.module==='favorite'?Number.MAX_SAFE_INTEGER:now()+600000;
+      if(error?.notSent===true||error?.definite===true&&latest.module==='petSell'){receipts.delete(latest.key);}
+      record.status='uncertain';record.until=['favorite','petSell','ghostCapture'].includes(latest.module)?Number.MAX_SAFE_INTEGER:now()+600000;
       reasons[latest.module]=String(error?.message||'Aktion nicht bestätigt').slice(0,150);
       event(latest.module,reasons[latest.module]);
     }
