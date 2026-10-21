@@ -4,7 +4,7 @@
 // @version      16.3.1
 // @updateURL   https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js
 // @downloadURL https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js
-// @description  V16.3.0: Pet Hutch withdrawals and safe portfolio-based Pet Auto-Sell
+// @description  V16.3.1: Jotai room state compatibility for build 1684+
 // @match        https://magicgarden.gg/*
 // @run-at       document-start
 // @grant        GM_xmlhttpRequest
@@ -2736,8 +2736,6 @@ function mountFieldGrid(container, plan, onChange) {
     welcomed: false, cancelPending: null, serverOffset: 0
   };
 
-  const seenSockets = new WeakSet();
-  function serverNow() { return Date.now() + bridge.serverOffset; }
   function roomAtomState() {
     const store = window.__jotaiStore;
     const cache = window.jotaiAtomCache;
@@ -2756,6 +2754,8 @@ function mountFieldGrid(container, plan, onChange) {
       full?.child?.data?.executedCommandSequence);
     return Number.isInteger(value) && value >= 0 ? value : null;
   }
+  const seenSockets = new WeakSet();
+  function serverNow() { return Date.now() + bridge.serverOffset; }
   function readFrontier() {
     if (!bridge.welcomed || window.MagicCircle_RoomConnection?.currentWebSocket !== bridge.socket) return bridge.frontier;
     const value = roomSequence(roomAtomState()?.full) ??
@@ -4094,5 +4094,5 @@ function mountFieldGrid(container, plan, onChange) {
   if (!firstV16 && readValue(sessionStorage, KEYS.resume) === "1") {
     start({ auto: true });
   }
-  console.log("✅ Magic Garden AutoFarm V16.3.0 geladen (Automationszentrale, ohne Fremdskripte).");
+  console.log("✅ Magic Garden AutoFarm V16.3.1 geladen (Automationszentrale, ohne Fremdskripte).");
 })();
