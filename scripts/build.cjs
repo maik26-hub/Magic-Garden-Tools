@@ -153,4 +153,4 @@ src = require('./header-updater.cjs')(src, stripExports('update-fetch.js'));
 src = require('./v16.cjs')(src, stripExports('info-tooltips.js')); 
 new vm.Script(src,{filename:'MagicGardenAutoFarm.user.js'});
 fs.writeFileSync(path.join(root,'MagicGardenAutoFarm.user.js'),src);
-console.log('Built V16.3.1:,Buffer.byteLength(src),'bytes');
+console.log('Built V16.3.1:',Buffer.byteLength(src),'bytes');
