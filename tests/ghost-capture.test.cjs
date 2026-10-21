@@ -66,7 +66,7 @@ test('build 1695 reads the native renderer ghost selection rather than invented 
  const scope={isActive:true,isWorldBuilt:true,isWorldDrawing:true,displayedRoomId:'room',context,
   getSystem:name=>name==='ghost'?{framedGhosts:(transform,rect)=>{assert.equal(transform,context.cameraTransform);assert.equal(rect.width,100);return {kind:'ready',ghosts:[{kind:'catch',ghost}]};}}:
    name==='cameraOverlay'?{app:{screen:{width:100,height:100}},viewfinderRect:(w,h,top)=>({x:0,y:top,width:w,height:h})}:null};
- const values={dayNightStageAtom:'night',isHoldingCameraAtom:true,cameraTargetAtom:{x:1,y:2},ghostCatchesAtom:{},quinoaDevEngineAtom:{page:{rendererScope:scope}}};
+ const values={dayNightStageAtom:'midnight',isHoldingCameraAtom:true,cameraTargetAtom:{x:1,y:2},ghostCatchesAtom:{},quinoaDevEngineAtom:{page:{rendererScope:scope}}};
  const atoms=new Map(Object.keys(values).map(label=>[label,{debugLabel:label}]));
  const page={jotaiAtomCache:{cache:atoms},__jotaiStore:{get:a=>values[a.debugLabel]}};
  const result=readNativeGhostState(page);
@@ -81,4 +81,7 @@ test('build 1695 reads the native renderer ghost selection rather than invented 
  scope.getSystem=name=>name==='ghost'?{framedGhosts:()=>({kind:'tooFar'})}:name==='cameraOverlay'?{app:{screen:{width:100,height:100}},viewfinderRect:()=>({x:0,y:0,width:100,height:100})}:null;
  assert.equal(readNativeGhostState(page).instances.length,0);
  assert.match(readNativeGhostState(page).why,/Reichweite/);
+});
+test('actual native sunset midnight and sunrise stages permit native readiness checks',()=>{
+ for(const stage of ['sunset','midnight','sunrise']){const s=live();s.ghost.stage=stage;assert.ok(createGhostCapture().propose(s).command,stage);}
 });

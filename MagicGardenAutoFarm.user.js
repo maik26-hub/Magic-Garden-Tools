@@ -1134,7 +1134,7 @@ function readNativeGhostState(page) {
   const result={stage:values.get('dayNightStageAtom'),holding:values.get('isHoldingCameraAtom'),
     target:values.get('cameraTargetAtom'),catches:values.get('ghostCatchesAtom'),instances:[],
     why:'Nativer Ghost-Renderer noch nicht verfügbar'};
-  if(result.holding!==true||result.stage!=='night')return result;
+  if(result.holding!==true||!['sunset','midnight','sunrise','night'].includes(result.stage))return result;
   try{
     const scope=values.get('quinoaDevEngineAtom')?.page?.rendererScope,context=scope?.context;
     if(scope?.isActive!==true||scope.isWorldBuilt!==true||scope.isWorldDrawing!==true||
@@ -1169,7 +1169,7 @@ function createGhostCapture(){
     if(!g)return no('Ghost-Spielzustand nicht verfügbar');
     if(g.source==='native-renderer'&&(typeof g.roomId!=='string'||!g.roomId||g.actor!==s.actor||g.roomId!==s.roomId||!Number.isFinite(s.serverNow)||
       Math.abs(s.serverNow-g.serverTimeMs)>2000))return no('Ghost-Renderer gehört nicht zum aktuellen frischen Spielzustand');
-    if(g.stage!=='night')return no('Warte auf bestätigte Nacht');
+    if(!['sunset','midnight','sunrise','night'].includes(g.stage))return no('Warte auf bestätigte Nacht');
     if(g.holding!==true)return no('Kamera muss gehalten werden');
     if(!Number.isFinite(g.target?.x)||!Number.isFinite(g.target?.y))return no('Kameraziel fehlt');
     if(!s.game?.ghostCatches||typeof s.game.ghostCatches!=='object'||Array.isArray(s.game.ghostCatches))return no('Server-Fangdaten fehlen');
