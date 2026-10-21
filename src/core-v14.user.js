@@ -291,7 +291,6 @@
     return Number.isInteger(value) && value >= 0 ? value : null;
   }
   function readFrontier() {
-    if (!bridge.welcomed || window.MagicCircle_RoomConnection?.currentWebSocket !== bridge.socket) return bridge.frontier;
     const value = roomSequence(roomAtomState()?.full) ??
       Number(window.MagicCircle_RoomConnection?.lastDistributedRoomPublication?.executedCommandSequence);
     if (Number.isInteger(value) && value >= 0) bridge.frontier = Math.max(bridge.frontier, value);
