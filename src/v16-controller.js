@@ -82,7 +82,8 @@ function createV16Controller(env) {
       locations.set(lc(raw.id),(locations.get(lc(raw.id))||0)+1);
     for(const {raw,source} of candidates){
       const p=raw?.itemType==='Pet'?{...raw,...(raw.data||{}),id:raw.id,itemType:raw.itemType}:null;if(!p||typeof p.id!=='string')continue;
-      let why=protection(raw,s,plan)||protection(p,s,plan);
+      let why=protection(p,s,plan);
+      if(!why&&(raw.locked||raw.isLocked||raw.protected||raw.isProtected||env.protected?.({},raw)))why='Gesperrt/geschützt';
       if(!why&&raw.data?.id&&lc(raw.data.id)!==lc(raw.id))why='Widersprüchliche Pet-ID';
       if(!why&&(!Array.isArray(p.abilities)||!p.abilities.length||p.abilities.some(a=>typeof a!=='string')||
         !Number.isFinite(p.xp)||!Number.isFinite(p.targetScale)))why='Pet-Metadaten unvollständig';
@@ -114,13 +115,21 @@ function createV16Controller(env) {
   const SOLD_KEY='magic_garden_v16_pet_attempts';
   function attempts(){try{const v=JSON.parse(env.storage.getItem(SOLD_KEY)||'{}');return v&&typeof v==='object'&&!Array.isArray(v)?v:null;}catch{return null;}}
   function saveAttempts(v){try{env.storage.setItem(SOLD_KEY,JSON.stringify(v));return true;}catch{return false;}}
+  async function locked(fn){
+    let acquired=false;
+    try{
+      if(typeof env.withPetLock!=='function')throw Error('Pet-/Ghost-Aktion benötigt die Browser-Tabsperre');
+      const result=await env.withPetLock(()=>{acquired=true;return fn();});
+      if(!acquired)throw Error('Pet-/Ghost-Aktion läuft in anderem Tab');
+      return result;
+    }catch(e){if(!acquired)e.notSent=true;throw e;}
+  }
   async function send(command,options={}){
     const retrieving=command.type==='MoveItem'&&command.from==='PetHutch'&&
       command.to==='inventory'&&command.quantity===1&&typeof command.itemId==='string';
     const selling=command.type==='SellPet';
     if(command.type==='PhotographGhost'){
-      if(typeof env.withPetLock!=='function')throw Error('Ghost-Aktion benötigt Browser-Tabsperre');
-      return env.withPetLock(async()=>{
+      return locked(async()=>{
         const Factory=typeof createGhostCapture==='function'?createGhostCapture:require('./ghost-capture.js').createGhostCapture;
         const g=Factory(),p=g.propose(env.snapshot());
         if(!env.config().ghostCapture||!p.command||JSON.stringify(p.command)!==JSON.stringify(command))throw Error(p.why||'Ghost-Aktion nicht freigegeben');
@@ -194,8 +203,7 @@ function createV16Controller(env) {
       }
     };
     if(retrieving||selling){
-      if(typeof env.withPetLock!=='function')throw Error('Pet-Aktion benötigt die Browser-Tabsperre');
-      return env.withPetLock(execute);
+      return locked(execute);
     }
     return execute();
   }

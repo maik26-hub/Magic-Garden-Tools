@@ -11,7 +11,7 @@ const cats={pets:{Pig:{name:'Pig',maxScale:2,hoursToMature:12}},abilities:{
   PetAgeBoost:{name:'Hatch XP',trigger:'hatchEgg',baseProbability:60,baseParameters:{bonusXp:1000}}
 }};
 function fixture({hutch=[pig('weak-hutch',90),pig('mid-hutch',94),pig('good-hutch',96)],
-  bag=[pig('new-best',99)],moveMode='observed',sellMode='observed',inventoryFill=0,config={}}={}){
+  bag=[pig('new-best',99)],moveMode='observed',sellMode='observed',inventoryFill=0,config={},lock=null}={}){
  let clock=10000;
  const s={actor:'me',ownerKey:'account',generation:1,serverNow:clock,game:{weather:'Normal',shops:{}},garden:{},
   fieldModes:Array(200).fill('none'),heldId:'',inventory:{items:[...bag,...Array.from({length:inventoryFill},(_,i)=>({id:'fill'+i,itemType:'Tool',toolId:'Camera',quantity:1}))],
@@ -19,7 +19,7 @@ function fixture({hutch=[pig('weak-hutch',90),pig('mid-hutch',94),pig('good-hutc
   own:{petSlots:[],petTeams:[],shopPurchases:{},coinsCount:1000}};
  const calls=[],storage=store();
  const e=createAutomationCore({storage,now:()=>clock,running:()=>true,snapshot:()=>s,
-  uuid:()=>`uuid-${Math.random()}`,protected:()=>false,loadCatalogs:async()=>({}),withPetLock:async fn=>fn(),
+  uuid:()=>`uuid-${Math.random()}`,protected:()=>false,loadCatalogs:async()=>({}),withPetLock:lock|| (async fn=>fn()),
   send:async c=>{
     calls.push(structuredClone(c));
     if(c.type==='MoveItem'&&c.from==='PetHutch'){
@@ -132,4 +132,15 @@ test('definite rejection retries with backoff and stops after three attempts',as
 test('corrupt durable pet action ledger blocks destructive commands',async()=>{
  const h=fixture();h.storage.setItem('magic_garden_v16_pet_attempts','invalid-json');
  await h.e.step();assert.equal(h.calls.length,0);
+});
+test('temporary tab lock contention never poisons a sale receipt',async()=>{
+ let contended=true;const h=fixture({lock:async fn=>{if(contended)throw Error('Other tab');return fn();}});
+ await h.e.step();assert.equal(h.calls.length,0);contended=false;h.advance();await h.e.step();
+ assert.equal(h.calls.length,1);assert.equal(h.calls[0].type,'MoveItem');
+});
+test('nested Pet data remains eligible while outer locks stay protected',async()=>{
+ const h=fixture(),p=h.s.inventory.storages[0].items[0];
+ h.s.inventory.storages[0].items[0]={id:p.id,itemType:'Pet',data:p};
+ assert.equal(h.e.petSellProposal().pet?.id,p.id);
+ h.s.inventory.storages[0].items[0].locked=true;await h.e.step();assert.equal(h.calls.length,0);
 });
