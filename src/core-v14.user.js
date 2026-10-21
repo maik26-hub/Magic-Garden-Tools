@@ -265,19 +265,35 @@
 
   // ===== Eigene Spielanbindung (keine Dritt-Scripts) =====
   // Die Schnittstelle MagicCircle_RoomConnection gehoert zum Spiel.
-  // Daten stammen ausschliesslich aus dessen subscribeToPatches + Welcome.
+  // Raumzustand ueber Jotai roomPublicationAtom; Legacy-Fallback und Welcome.
   const bridge = {
     socket: null, connection: null, unsubscribe: null, playerId: null,
     lastFullState: null, garden: null, inventory: null,
     sequence: -1, frontier: -1, lastSnapshotAt: 0, observedSockets: 0
   };
 
-  function readFrontier() {
-    const value = Number(window.MagicCircle_RoomConnection
-      ?.lastDistributedRoomPublication?.executedCommandSequence);
-    if (Number.isInteger(value) && value >= 0) {
-      bridge.frontier = Math.max(bridge.frontier, value);
+  function roomAtomState() {
+    const store = window.__jotaiStore;
+    const cache = window.jotaiAtomCache;
+    const atoms = cache instanceof Map ? cache : cache?.cache;
+    if (!store || typeof store.get !== "function" || !(atoms instanceof Map)) return null;
+    for (const atom of atoms.values()) {
+      const label = String(atom?.debugLabel || "");
+      if (label !== "roomPublicationAtom" && !label.endsWith("/roomPublicationAtom")) continue;
+      try { return { store, atom, full: store.get(atom)?.state }; } catch { return null; }
     }
+    return null;
+  }
+  function roomSequence(full) {
+    const value = Number(full?.child?.data?.lastDistributedRoomPublication?.executedCommandSequence ??
+      full?.data?.lastDistributedRoomPublication?.executedCommandSequence ??
+      full?.child?.data?.executedCommandSequence);
+    return Number.isInteger(value) && value >= 0 ? value : null;
+  }
+  function readFrontier() {
+    const value = roomSequence(roomAtomState()?.full) ??
+      Number(window.MagicCircle_RoomConnection?.lastDistributedRoomPublication?.executedCommandSequence);
+    if (Number.isInteger(value) && value >= 0) bridge.frontier = Math.max(bridge.frontier, value);
     return bridge.frontier;
   }
 
@@ -414,24 +430,64 @@
 
   function watchGameConnection() {
     const connection = window.MagicCircle_RoomConnection;
-    if (!connection) return;
-    if (connection.currentWebSocket && connection.currentWebSocket !== bridge.socket) {
+    if (connection?.currentWebSocket && connection.currentWebSocket !== bridge.socket) {
       observeSocket(connection.currentWebSocket);
     }
-    if (bridge.connection === connection) return;
+    const state = roomAtomState();
+    if (state) {
+      if (bridge.subscriptionStore !== state.store || bridge.subscriptionAtom !== state.atom || !bridge.subscribed) {
+        if (typeof bridge.unsubscribe === "function") {
+          try { bridge.unsubscribe(); } catch {}
+        }
+        bridge.unsubscribe = null;
+        bridge.subscribed = false;
+        bridge.subscriptionStore = null;
+        bridge.subscriptionAtom = null;
+        if (typeof state.store.sub === "function") {
+          try {
+            const emit = () => {
+              if (bridge.subscriptionStore !== state.store || bridge.subscriptionAtom !== state.atom) return;
+              let full;
+              try { full = state.store.get(state.atom)?.state; } catch { return; }
+              if (full?.child && full?.data?.roomId) chooseOwnSlot(full);
+            };
+            const unsubscribe = state.store.sub(state.atom, emit);
+            if (typeof unsubscribe === "function") {
+              bridge.unsubscribe = unsubscribe;
+              bridge.subscriptionStore = state.store;
+              bridge.subscriptionAtom = state.atom;
+              bridge.subscribed = true;
+              bridge.connection = connection || null;
+              emit();
+            }
+          } catch (error) {
+            console.warn("[MG Standalone] Jotai state not ready:", error?.message);
+          }
+        }
+      }
+      if (bridge.subscribed) return;
+    }
+    // Legacy game builds only; keep retrying until a usable subscription exists.
+    if (!connection || typeof connection.subscribeToPatches !== "function") return;
+    if (bridge.connection === connection && bridge.subscribed) return;
     if (typeof bridge.unsubscribe === "function") {
       try { bridge.unsubscribe(); } catch {}
     }
-    bridge.connection = connection;
     bridge.unsubscribe = null;
-    if (typeof connection.subscribeToPatches === "function") {
-      try {
-        bridge.unsubscribe = connection.subscribeToPatches((_patches, full) => {
-          chooseOwnSlot(full);
-        });
-      } catch (err) {
-        console.warn("[MG Standalone] Spielzustand noch nicht bereit:", err?.message);
+    bridge.subscribed = false;
+    bridge.subscriptionStore = null;
+    bridge.subscriptionAtom = null;
+    bridge.connection = connection;
+    try {
+      const unsubscribe = connection.subscribeToPatches((_patches, full) => {
+        if (bridge.connection === connection && connection.currentWebSocket === bridge.socket) chooseOwnSlot(full);
+      });
+      if (typeof unsubscribe === "function") {
+        bridge.unsubscribe = unsubscribe;
+        bridge.subscribed = true;
       }
+    } catch (error) {
+      console.warn("[MG Standalone] Legacy state not ready:", error?.message);
     }
   }
   watchGameConnection();
