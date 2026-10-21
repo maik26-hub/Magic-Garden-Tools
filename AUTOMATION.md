@@ -67,3 +67,13 @@ Bei fremdem Spieler/Raum, mehr als zwei Sekunden altem Rendererzustand, fehlende
 
 Belegter nativer Ablauf (öffentlich ausgelieferte Module, Build 1695): QuinoaCanvas-Y6mPbFNi.js setzt quinoaDevEngineAtom nach der Initialisierung; installWorldSystems-BAxrsFvy.js installiert ghost und cameraOverlay und verwendet framedGhosts/viewfinderRect vor PhotographGhost. Diese Modulnamen dienen nur als Untersuchungsnachweis, werden nicht im Userscript importiert oder fest eingebaut. Automatisierte Tests reproduzieren diesen Vertrag; ein erfolgreicher Fang am echten Spielkonto ist weiterhin separat zu prüfen.
 Zusätzlich akzeptiert V16.3.3 die belegten nativen Nachtphasen sunset, midnight und sunrise; die alte ausschließliche Prüfung auf night verhinderte im aktuellen Build bereits die Zielabfrage.
+
+## V16.3.4 – optionale Ghost-Vollautomatik
+
+Unter Journal zusätzlich zu Auto Ghost Capture den Schalter „Vollautomatik: Kamera ausrüsten & Ghosts anlaufen“ aktivieren und AutoFarm starten. Der neue Schalter bleibt beim Update standardmäßig aus. Benötigt eine Kamera im Inventar. Die Vollautomatik rüstet sie mit SetSelectedItem über die bestehende Command-Pipeline aus und wartet auf erfolgreiche Antwort sowie bestätigten gehaltenen Gegenstand.
+
+Aktuelle Ghost-Ziele werden ausschließlich aus dem laufenden nativen Ghost-System gelesen (out, tile, instanceId). Der Bot verwendet den normalen tapToMove-Pfadfinder des aktiven playerViews-Scope mit dessen üblicher Laufgeschwindigkeit und Hindernisprüfung. Keine selbst gesendeten PlayerPosition-Pakete, Teleports, Dev-Aktionen oder geschriebenen Kamera-Atoms. Die normale Spielkamera folgt dem Spieler; für den tatsächlichen Fang muss weiterhin die native framedGhosts-Prüfung den Ghost im Kamerarahmen und in Reichweite freigeben. Gegebenenfalls werden benachbarte erreichbare Standpunkte versucht.
+
+Ein Laufabschnitt dauert höchstens sechs Sekunden; danach wird der aktuelle Ghost neu geprüft. Frische eigene Spieler-/Raumdaten, Kamera, Nachtphase und unveränderte Instanz werden während des Laufs alle 200 ms kontrolliert. Verschwundene Ziele oder Stop brechen ausschließlich den vom Bot begonnenen Lauf ab. Manuelle Ersatzlaufwege werden nicht gelöscht. Eigene Eingaben pausieren die Navigation zunächst fünf Sekunden, Eingriffe in einen laufenden Bot-Lauf mindestens 15 Sekunden. Offene Spielmenüs und freie Kamera verhindern den Start. Browser-Tabs teilen sich die vorhandene Transaktionssperre. Andere Farm-Aktionen laufen nicht gleichzeitig mit einem vom Bot gehaltenen Laufabschnitt.
+
+Die Vollautomatik ist lokal mit simuliertem Zustand und dem belegten nativen Laufvertrag geprüft. Erfolgreiches Navigieren und Fotografieren auf einem echten Spielkonto bleibt gesondert zu verifizieren.

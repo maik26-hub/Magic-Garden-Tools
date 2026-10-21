@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         Magic Garden AutoFarm
 // @namespace    mg-autofarm-local
-// @version      16.3.3
+// @version      16.3.4
 // @updateURL   https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js
 // @downloadURL https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js
-// @description  V16.3.3: safe Pet Auto-Sell and optional verified Ghost Capture
+// @description  V16.3.4: safe Pet Auto-Sell and optional verified Ghost Capture
 // @match        https://magicgarden.gg/*
 // @run-at       document-start
 // @grant        GM_xmlhttpRequest
@@ -1115,6 +1115,120 @@ function createTeamActions(env){
 }
 
 
+/* Build 1695's normal player pathfinder is used at its default walking speed.
+ * No PlayerPosition packets, teleports, camera atoms or native shutter writes. */
+function readNativeGhostNavigation(page){
+  try{
+    const store=page?.__jotaiStore,cache=page?.jotaiAtomCache,atoms=cache instanceof Map?cache:cache?.cache;
+    if(typeof store?.get!=='function'||!(atoms instanceof Map))return null;
+    const values=new Map(),wanted=new Set(['quinoaDevEngineAtom','dayNightStageAtom','isHoldingCameraAtom','cameraModeAtom','anyModalOpenAtom']);
+    for(const atom of atoms.values()){
+      const label=String(atom?.debugLabel||'').split('/').pop();if(!wanted.has(label))continue;
+      if(values.has(label))return null;values.set(label,store.get(atom));
+    }
+    const engine=values.get('quinoaDevEngineAtom'),scope=engine?.page?.rendererScope,player=engine?.page?.playerViews;
+    if(!scope||scope.isActive!==true||scope.isWorldBuilt!==true||scope.isWorldDrawing!==true||
+      scope.lifetime?.signal?.aborted||player?.isActive!==true||player.lifetime?.signal?.aborted||
+      engine.page.playerViewsReady!==true||typeof scope.getSystem!=='function'||typeof player.getSystem!=='function')return null;
+    const tap=player.getSystem('tapToMove'),ghost=scope.getSystem('ghost'),context=scope.context;
+    if(tap?.isActive!==true||typeof tap.startPathTo!=='function'||typeof tap.cancelPath!=='function'||
+      typeof tap.getReachableMap!=='function'||!Array.isArray(ghost?.ghosts)||!context)return null;
+    const targets=ghost.ghosts.filter(p=>p?.out===true&&Number.isInteger(p.index)&&p.index>=0&&p.index<=2&&
+      typeof p.instanceId==='string'&&p.instanceId.length>0&&p.instanceId.length<=64&&
+      Number.isFinite(p.tile?.x)&&Number.isFinite(p.tile?.y)).map(p=>({ghostIndex:p.index,ghostInstanceId:p.instanceId,x:p.tile.x,y:p.tile.y}));
+    return {actor:context.room?.localPlayerId,roomId:scope.displayedRoomId,serverTimeMs:context.serverTimeMs,
+      position:context.room?.localPlayerPosition,stage:values.get('dayNightStageAtom'),holding:values.get('isHoldingCameraAtom'),
+      mode:values.get('cameraModeAtom'),blocked:values.get('anyModalOpenAtom')!==false||page.document?.hidden===true,tap,targets};
+  }catch{return null;}
+}
+function createGhostNavigator(env){
+  let notice='Aus',owned=null,revision=0,pauseUntil=0;const visits=new Map();
+  const nights=new Set(['sunset','midnight','sunrise','night']);
+  const now=()=>env.now(),wait=env.wait||(()=>new Promise(resolve=>setTimeout(resolve,200)));
+  function cancelOwned(){
+    const p=owned;owned=null;
+    if(p&&p.tap.onWalkFinished===p.finish)p.tap.cancelPath('interrupted');
+  }
+  function stop(){revision++;cancelOwned();notice='Ghost-Navigation gestoppt';}
+  function active(token){const c=env.config();return token===revision&&env.running()&&c.enabled&&c.ghostCapture&&c.ghostNavigate;}
+  function current(s,r){return !!s&&!!r&&typeof s.roomId==='string'&&!!s.roomId&&r.actor===s.actor&&r.roomId===s.roomId&&
+    Number.isFinite(s.serverNow)&&Number.isFinite(r.serverTimeMs)&&Math.abs(s.serverNow-r.serverTimeMs)<=2000&&
+    nights.has(r.stage)&&r.mode==='player'&&!r.blocked&&Number.isFinite(r.position?.x)&&Number.isFinite(r.position?.y);}
+  function destination(r,target,visited){
+    const tap=r.tap,map=tap.map;
+    if(!Number.isInteger(map?.cols)||!Number.isInteger(map.rows)||map.cols<1||map.rows<1||map.cols*map.rows>1000000)return null;
+    const reachable=tap.getReachableMap(r.position);if(!reachable||reachable.length!==map.cols*map.rows)return null;
+    const cells=[];
+    for(let y=Math.max(0,Math.round(target.y)-2);y<=Math.min(map.rows-1,Math.round(target.y)+2);y++)
+      for(let x=Math.max(0,Math.round(target.x)-2);x<=Math.min(map.cols-1,Math.round(target.x)+2);x++){
+        if(reachable[x+y*map.cols]!==1||visited.has(x+':'+y)||x===r.position.x&&y===r.position.y)continue;
+        // Approach closely; the native follow camera then supplies the framing.
+        cells.push({x,y,score:Math.hypot(x-target.x,y-target.y)*2+Math.hypot(x-r.position.x,y-r.position.y)});
+      }
+    cells.sort((a,b)=>a.score-b.score);return cells[0]?{x:cells[0].x,y:cells[0].y}:null;
+  }
+  async function step(){
+    const token=revision;if(!active(token)){cancelOwned();notice='Aus';return false;}
+    if(now()<pauseUntil||now()-(env.userInputAt?.()??-Infinity)<5000){cancelOwned();notice='Eigene Eingabe – Navigation pausiert';return false;}
+    let s=env.snapshot(),r=env.runtime?.();
+    if(!current(s,r)){cancelOwned();notice='Warte auf frischen eigenen Spielzustand, Nacht und freie Spielkamera';return false;}
+    if(env.captureReady(s)){notice='Ghost im Kamerarahmen – Foto wird geprüft';return false;}
+    if(typeof env.withPetLock!=='function'){notice='Browser-Tabsperre fehlt – kein automatisches Laufen';return false;}
+    let acquired=false;
+    try{return await env.withPetLock(async()=>{
+      acquired=true;s=env.snapshot();r=env.runtime?.();
+      if(!active(token)||!current(s,r))return false;
+      const epoch={actor:s.actor,ownerKey:s.ownerKey,roomId:s.roomId,generation:s.generation};
+      if(r.holding!==true){
+        const cameras=s.inventory?.items?.filter(i=>i?.itemType==='Tool'&&i.toolId==='Camera'&&(i.id==null||i.id==='Camera')&&i.quantity>0)||[];
+        if(cameras.length!==1){notice='Genau eine zugeordnete Kamera im Inventar benötigt';return false;}
+        notice='Kamera wird ausgerüstet';
+        const reply=await env.send({type:'SetSelectedItem',itemId:'Camera',decorRotation:0},{validate:n=>active(token)&&n.actor===epoch.actor&&n.ownerKey===epoch.ownerKey&&n.generation===epoch.generation&&n.roomId===epoch.roomId});
+        const after=env.snapshot(),runtime=env.runtime?.();
+        if(!reply?.ok||!current(after,runtime)||after.actor!==epoch.actor||after.ownerKey!==epoch.ownerKey||after.roomId!==epoch.roomId||after.generation!==epoch.generation||runtime.holding!==true)throw Error('Kamera noch nicht im Spielzustand bestätigt');
+        notice='Kamera ausgerüstet';return true;
+      }
+      const tap=r.tap;
+      if(!tap||typeof tap.startPathTo!=='function'||typeof tap.cancelPath!=='function'||typeof tap.getReachableMap!=='function')return false;
+      if(tap.onWalkFinished||tap.pathIndex<tap.path?.length){notice='Eigener Laufweg hat Vorrang';return false;}
+      const targets=Array.isArray(r.targets)?r.targets.filter(p=>Number.isInteger(p.ghostIndex)&&p.ghostIndex>=0&&p.ghostIndex<=2&&
+        typeof p.ghostInstanceId==='string'&&p.ghostInstanceId.length>0&&p.ghostInstanceId.length<=64&&Number.isFinite(p.x)&&Number.isFinite(p.y)):[];
+      targets.sort((a,b)=>Math.hypot(a.x-r.position.x,a.y-r.position.y)-Math.hypot(b.x-r.position.x,b.y-r.position.y));
+      let target=null,to=null,visited=null;
+      for(const p of targets){
+        const key=epoch.roomId+'|'+p.ghostInstanceId;
+        if(!visits.has(key)){if(visits.size>=16)visits.delete(visits.keys().next().value);visits.set(key,new Set());}
+        const tried=visits.get(key),dest=destination(r,p,tried);if(dest){target={...p};to=dest;visited=tried;break;}
+      }
+      if(!target){notice=targets.length?'Kein erreichbarer Kamerastandpunkt – warte':'Kein aktuell vorhandener Ghost zum Anlaufen';return false;}
+      let finished=false,outcome='';
+      const finish=result=>{finished=true;outcome=result;};owned={tap,finish};
+      const startedAt=now(),inputAt=env.userInputAt?.()??-Infinity;
+      visited.add(to.x+':'+to.y);
+      notice='Laufe zu Ghost '+(target.ghostIndex+1)+' – Kamera folgt automatisch';
+      try{
+        tap.startPathTo(to,{onFinished:finish});
+        while(!finished&&now()-startedAt<6000){
+          const live=env.snapshot(),runtime=env.runtime?.();
+          if(!active(token)||!current(live,runtime)||live.generation!==epoch.generation||live.ownerKey!==epoch.ownerKey||
+            runtime.tap!==tap||runtime.holding!==true||!runtime.targets?.some(p=>p.ghostInstanceId===target.ghostInstanceId&&p.ghostIndex===target.ghostIndex)){
+            notice='Lauf abgebrochen – Ziel oder Spielzustand geändert';break;
+          }
+          if((env.userInputAt?.()??-Infinity)>inputAt){pauseUntil=now()+15000;notice='Eigene Eingabe – Lauf abgebrochen';break;}
+          if(env.captureReady(live)){notice='Ghost im Kamerarahmen – bereit zum Foto';break;}
+          await wait();
+        }
+        if(outcome==='interrupted'){pauseUntil=now()+15000;notice='Eigene Bewegung hat Vorrang – pausiert';}
+        else if(outcome==='failed')notice='Nativer Laufweg nicht erreichbar – neuer Standpunkt wird geprüft';
+        return true;
+      }finally{cancelOwned();}
+    })??false;}catch(error){cancelOwned();notice=String(error?.message||'Ghost-Navigation fehlgeschlagen').slice(0,150);pauseUntil=now()+3000;return false;}
+    finally{if(!acquired&&notice==='Aus')notice='Ghost-Navigation läuft in anderem Tab';}
+  }
+  return {step,stop,status:()=>notice};
+}
+
+
 /* Native build 1695: QuinoaCanvas stores the live engine in
  * quinoaDevEngineAtom unconditionally (the name does not enable dev tools).
  * Read only the renderer's framing query; never call reveal/confirmPhoto. */
@@ -1434,8 +1548,8 @@ function createAutomationCore(env) {
   'use strict';
   const clone=value=>typeof structuredClone==='function'?structuredClone(value):JSON.parse(JSON.stringify(value));
   const KEY='magic_garden_automation_v15', LEDGER='magic_garden_purchase_budget_v15', RECEIPTS='magic_garden_action_receipts_v15', AUTO_MARKS='magic_garden_own_crop_favorites_v16';
-  const names={favorite:'Wertschutz / Favoriten',journal:'Journal',feed:'Pets füttern',trough:'Futtertrog',claims:'Quest-Belohnungen',hatch:'Eier ausbrüten',plant:'Nachpflanzen',eggs:'Eier nachlegen',water:'Gießen',storage:'Lager',teams:'Wetter-Petteams',buy:'Shop-Einkauf',petSell:'Pet Auto-Sell',ghostCapture:'Auto Ghost Capture',ariesSync:'Aries-Teams aktualisieren'};
-  const defaults={enabled:false,harvest:true,cropSell:true,favorite:false,journal:false,feed:false,trough:false,claims:false,hatch:false,plant:false,eggs:false,water:false,storage:false,teams:false,buy:false,petSell:false,ghostCapture:false,ariesSync:false,petSellEggs:[],petSellPerSession:0,teamBuilder:false,autoTeams:false,hatchTeamKey:'',sellTeamKey:'',petSellTeamKey:'',idleTeamKey:'',ariesManagedTeams:[],seedSpecies:'',eggPlaceMode:'all',eggPlaceAllowed:[],eggHatchMode:'all',eggHatchAllowed:[],hungerPercent:30,foodMaxValue:1000,troughItems:5,toolReserve:2,waterMinSeconds:600,keepValue:0,keepSpecies:[],minHarvestSize:0,minHarvestValue:0,wantedMutations:[],pauseWeather:[],buyRules:[],teamRules:[],actionIntervalMs:900};
+  const names={favorite:'Wertschutz / Favoriten',journal:'Journal',feed:'Pets füttern',trough:'Futtertrog',claims:'Quest-Belohnungen',hatch:'Eier ausbrüten',plant:'Nachpflanzen',eggs:'Eier nachlegen',water:'Gießen',storage:'Lager',teams:'Wetter-Petteams',buy:'Shop-Einkauf',petSell:'Pet Auto-Sell',ghostCapture:'Auto Ghost Capture',ghostNavigate:'Ghost-Vollautomatik',ariesSync:'Aries-Teams aktualisieren'};
+  const defaults={enabled:false,harvest:true,cropSell:true,favorite:false,journal:false,feed:false,trough:false,claims:false,hatch:false,plant:false,eggs:false,water:false,storage:false,teams:false,buy:false,petSell:false,ghostCapture:false,ghostNavigate:false,ariesSync:false,petSellEggs:[],petSellPerSession:0,teamBuilder:false,autoTeams:false,hatchTeamKey:'',sellTeamKey:'',petSellTeamKey:'',idleTeamKey:'',ariesManagedTeams:[],seedSpecies:'',eggPlaceMode:'all',eggPlaceAllowed:[],eggHatchMode:'all',eggHatchAllowed:[],hungerPercent:30,foodMaxValue:1000,troughItems:5,toolReserve:2,waterMinSeconds:600,keepValue:0,keepSpecies:[],minHarvestSize:0,minHarvestValue:0,wantedMutations:[],pauseWeather:[],buyRules:[],teamRules:[],actionIntervalMs:900};
   const arr=v=>Array.isArray(v)?v:[],num=v=>typeof v==='number'&&Number.isFinite(v),str=v=>typeof v==='string'&&v.length>0&&v.length<120,obj=v=>v&&typeof v==='object'&&!Array.isArray(v);
   const cleanList=v=>[...new Set(arr(v).filter(str))].slice(0,40);
   const bounded=(v,f,min,max)=>num(v)?Math.min(max,Math.max(min,Math.round(v))):f;
@@ -1483,6 +1597,9 @@ function createAutomationCore(env) {
   const counts=Object.fromEntries(Object.keys(names).map(k=>[k,0])),reasons={},outcomes={},events=[],receipts=new Map();
   const V16=typeof createV16Controller==='function'?createV16Controller:require('./v16-controller.js').createV16Controller;
   const v16=V16({...env,config:()=>config,catalogs:()=>catalogs,rawSend:env.send});
+  const Navigator=typeof createGhostNavigator==='function'?createGhostNavigator:require('./ghost-navigation.js').createGhostNavigator;
+  const navigation=Navigator({...env,config:()=>config,snapshot,runtime:env.nativeGhostRuntime,
+    captureReady:s=>!!ghosts.propose(s).command,send:(cmd,opt)=>v16.send(cmd,opt)});
   for(const r of arr(read(RECEIPTS,[])).slice(-200))if(obj(r)&&typeof r.key==='string'&&r.key.length<400&&num(r.until)&&r.until>env.now()&&typeof r.fp==='string')receipts.set(r.key,r);
   const now=()=>env.now();
   function event(module,message){events.push({at:now(),module,message});if(events.length>40)events.shift();}
@@ -1491,7 +1608,7 @@ function createAutomationCore(env) {
     while(receipts.size>200){const removable=[...receipts].find(([,r])=>r.kind!=='favorite');if(!removable)return false;receipts.delete(removable[0]);}
     return write(RECEIPTS,[...receipts.values()]);
   }
-  function configure(patch){const candidate=normalize({...config,...patch});if(!write(KEY,candidate))throw new Error('Einstellungen konnten nicht gespeichert werden');config=candidate;runGeneration++;return clone(config);}
+  function configure(patch){const candidate=normalize({...config,...patch});if(!write(KEY,candidate))throw new Error('Einstellungen konnten nicht gespeichert werden');config=candidate;runGeneration++;if(!config.enabled||!config.ghostCapture||!config.ghostNavigate)navigation.stop();return clone(config);}
   function snapshot(){const s=env.snapshot();if(!s||!str(s.actor)||!obj(s.own)||!obj(s.game)||!obj(s.garden)||!obj(s.inventory)||!Array.isArray(s.inventory.items)||!Array.isArray(s.inventory.favoritedItemIds))return null;return s;}
   function plots(s, mode) {
     if (!Array.isArray(s.fieldModes) || s.fieldModes.length !== 200) return [];
@@ -1736,7 +1853,7 @@ function createAutomationCore(env) {
     reasons[module]='Nichts zu tun';try{const j=plan(s);if(j){reasons[module]='Bereit';output.push(j);}}
     catch{reasons[module]='Unerwartete Spieldaten – ausgelassen';}
   }return output;}
-  function selectedJob(s){const all=candidates(s),urgent=all.find(j=>['favorite','claims','feed'].includes(j.module));const priority={plantSeeds:'plant',growEggs:'eggs',hatchEggs:'hatch',waterPlants:'water',feedPets:'feed',logJournal:'journal',buySeeds:'buy',buyEggs:'buy',buyDecor:'buy'};const goals=arr(s.own.dailyQuests?.quests).filter(q=>q?.claimedAt===null&&q?.completedAt===null).map(q=>priority[q.objective?.kind]).filter(Boolean);const questAction=all.find(j=>goals.includes(j.module)&&j.module!==lastModule);return urgent||questAction||all.find(j=>j.module!==lastModule)||all[0]||null;}
+  function selectedJob(s){const all=candidates(s),urgent=all.find(j=>['favorite','claims','feed'].includes(j.module));const priority={plantSeeds:'plant',growEggs:'eggs',hatchEggs:'hatch',waterPlants:'water',feedPets:'feed',logJournal:'journal',buySeeds:'buy',buyEggs:'buy',buyDecor:'buy'};const goals=arr(s.own.dailyQuests?.quests).filter(q=>q?.claimedAt===null&&q?.completedAt===null).map(q=>priority[q.objective?.kind]).filter(Boolean);const questAction=all.find(j=>goals.includes(j.module)&&j.module!==lastModule);return all.find(j=>j.module==='ghostCapture')||urgent||questAction||all.find(j=>j.module!==lastModule)||all[0]||null;}
   async function execute(candidate,s){
     if(!env.running()||!config.enabled)return false;
     const fresh=snapshot();if(!fresh||fresh.actor!==s.actor||fresh.generation!==s.generation)return false;
@@ -1795,10 +1912,13 @@ function createAutomationCore(env) {
     persistReceipts();return true;
   }
   async function step(){if(!config.enabled||!env.running()||busy)return false;void loadCatalogs();if(now()-lastActionAt<config.actionIntervalMs)return false;const s=snapshot();if(!s)return false;
+    if(config.ghostCapture&&config.ghostNavigate){
+      busy=true;try{if(await navigation.step()){lastActionAt=now();return true;}}finally{busy=false;}
+    }
     if((config.teamBuilder||config.autoTeams)&&await v16.tick())return true;
     const candidate=selectedJob(s);if(!candidate)return false;busy=true;const generation=runGeneration;try{if(candidate.module==='buy'){if(typeof env.withPurchaseLock!=='function'){reasons.buy='Browser-Kaufsperre nicht verfügbar';return false;}return await env.withPurchaseLock(s.actor,async()=>generation===runGeneration&&env.running()?execute(candidate,s):false);}return await execute(candidate,s);}finally{busy=false;}}
   function preview(){const s=snapshot();return s?candidates(s).map(j=>({module:j.module,action:j.command.type})):[];}
-  function status(){const s=snapshot(),b=s?ledger(s):null;return {enabled:config.enabled,busy,catalogs:catalogMessage,weather:s?weather(s):'unbekannt',spentToday:b?.data.spent??0,catalogSource:env.catalogDiagnostics?.()||null,queue:preview(),modules:Object.entries(names).map(([id,label])=>({id,label,on:config[id],confirmed:counts[id],status:outcomes[id]?.until>now()?outcomes[id].text:(reasons[id]||'Warte')})),sell:reasons.sell||'',teamAutomation:(()=>{const t=v16.state();return {ready:t.ready,message:t.why,saved:t.plans.filter(p=>p.saved).length,pending:t.plans.filter(p=>p.pending).length,notice:t.notice,action:t.action};})(),quests:arr(s?.own.dailyQuests?.quests).map(q=>({kind:q.objective?.kind||'unknown',progress:q.progress,target:q.objective?.target,claimed:num(q.claimedAt)})),events:events.slice(-10)};}
+  function status(){const s=snapshot(),b=s?ledger(s):null;return {enabled:config.enabled,busy,catalogs:catalogMessage,weather:s?weather(s):'unbekannt',spentToday:b?.data.spent??0,catalogSource:env.catalogDiagnostics?.()||null,queue:preview(),modules:Object.entries(names).map(([id,label])=>({id,label,on:config[id],confirmed:counts[id],status:id==='ghostNavigate'?navigation.status():outcomes[id]?.until>now()?outcomes[id].text:(reasons[id]||'Warte')})),sell:reasons.sell||'',teamAutomation:(()=>{const t=v16.state();return {ready:t.ready,message:t.why,saved:t.plans.filter(p=>p.saved).length,pending:t.plans.filter(p=>p.pending).length,notice:t.notice,action:t.action};})(),quests:arr(s?.own.dailyQuests?.quests).map(q=>({kind:q.objective?.kind||'unknown',progress:q.progress,target:q.objective?.target,claimed:num(q.claimedAt)})),events:events.slice(-10)};}
   // Human-readable menus retain native IDs internally. Missing catalogs never
   // become free-text inputs or guessed purchase commands.
   function menuChoices() {
@@ -1861,7 +1981,7 @@ function createAutomationCore(env) {
       fields:s?{plant:plots(s,'plant').length,egg:plots(s,'egg').length}:null
     };
   }
-  return {menuChoices,configure,getConfig:()=>clone(config),step,preview,status,loadCatalogs,harvestAllowed,saleAllowed,produceValue,petGoals:petAdvisor.goals,analyzePets:goal=>petAdvisor.analyze(snapshot(),catalogs,goal),ariesTeams:()=>petPolicy.ariesTeams(env.ariesService?.()||null),petSellProposal:()=>v16.salePreview(),teamState:()=>v16.state(),requestTeam:key=>v16.requestTeam(key),dispatch:(cmd,opt)=>v16.send(cmd,opt),resetCounters(){for(const k of Object.keys(counts))counts[k]=0;events.length=0;},stop(){runGeneration++;},catalogs:()=>catalogs,choices(){const s=snapshot();return {seeds:Object.keys(catalogs.plants||{}),eggs:Object.keys(catalogs.eggs||{}),tools:Object.keys(catalogs.tools||{}),decor:Object.keys(catalogs.decor||{}),pets:arr(s?.own.petTeams).map(t=>({id:t.id,name:t.name||'Team'}))};}};
+  return {menuChoices,configure,getConfig:()=>clone(config),step,preview,status,loadCatalogs,harvestAllowed,saleAllowed,produceValue,petGoals:petAdvisor.goals,analyzePets:goal=>petAdvisor.analyze(snapshot(),catalogs,goal),ariesTeams:()=>petPolicy.ariesTeams(env.ariesService?.()||null),petSellProposal:()=>v16.salePreview(),teamState:()=>v16.state(),requestTeam:key=>v16.requestTeam(key),dispatch:(cmd,opt)=>v16.send(cmd,opt),resetCounters(){for(const k of Object.keys(counts))counts[k]=0;events.length=0;},stop(){runGeneration++;navigation.stop();},catalogs:()=>catalogs,choices(){const s=snapshot();return {seeds:Object.keys(catalogs.plants||{}),eggs:Object.keys(catalogs.eggs||{}),tools:Object.keys(catalogs.tools||{}),decor:Object.keys(catalogs.decor||{}),pets:arr(s?.own.petTeams).map(t=>({id:t.id,name:t.name||'Team'}))};}};
 }
 
 
@@ -2136,7 +2256,7 @@ function mountAutomationUI(parent, engine, document) {
       }),card);ariesManagedList.appendChild(card);
     }
   }
-  const quests=section('Journal & tägliche Quests');check('Auto Ghost Capture (optional)', 'ghostCapture',quests);explain('Standardmäßig aus. Benötigt gehaltene Kamera, bestätigte Nacht und aktuelle sichtbare Ghost-Instanz. Fehlende Spieldaten werden im Status angezeigt; alte IDs werden nie verwendet.',quests);check('Neue Journalvarianten fotografieren','journal',quests);check('Fertige Belohnungen abholen','claims',quests);
+  const quests=section('Journal & tägliche Quests');check('Auto Ghost Capture (optional)', 'ghostCapture',quests);check('Vollautomatik: Kamera ausrüsten & Ghosts anlaufen','ghostNavigate',quests);explain('Mit Auto Ghost Capture: Kamera aus dem Inventar ausrüsten, aktuelle Ghosts mit normaler Wegfindung anlaufen und automatisch fotografieren. Die Kamera folgt dem Spieler. Eigene Eingaben pausieren die Navigation; Stop bricht den eigenen Lauf ab.',quests);explain('Standardmäßig aus. Benötigt gehaltene Kamera, bestätigte Nacht und aktuelle sichtbare Ghost-Instanz. Fehlende Spieldaten werden im Status angezeigt; alte IDs werden nie verwendet.',quests);check('Neue Journalvarianten fotografieren','journal',quests);check('Fertige Belohnungen abholen','claims',quests);
   const qnote=document.createElement('small');qnote.textContent='Camera benötigt. Questbelohnungen werden nicht teilweise verworfen. Quests werden nicht blind durch Einkäufe oder Umgraben erzwungen.';quests.appendChild(qnote);
   const teams=section('Wetterabhängige Petteams');check('Vorhandene Teams wechseln','teams',teams);
   const weatherInput=document.createElement('select');weatherInput.style.cssText=style;weatherInput.dataset.mgChoice='teamWeather';row('Bei diesem Wetter',weatherInput,teams).classList.add('mg-wide-choice');
@@ -2710,7 +2830,7 @@ function mountFieldGrid(container, plan, onChange) {
   }
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-  const VERSION = "16.3.3";
+  const VERSION = "16.3.4";
   const UPDATE_URL = "https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js";
   const NUMBER_FIELDS = Object.freeze({
     sellThreshold: { min: 5, max: 200, step: 1 },
@@ -3254,7 +3374,8 @@ function mountFieldGrid(container, plan, onChange) {
       let timeout, observeTimer, ack=null;
       const retrieving=command.type==='MoveItem'&&command.from==='PetHutch'&&command.to==='inventory';
       const photographing=command.type==='PhotographGhost';
-      const observed=retrieving||photographing||['SellPet','SavePetTeam','ApplyPetTeam'].includes(command.type);
+      const equipping=command.type==='SetSelectedItem'&&command.itemId==='Camera';
+      const observed=equipping||retrieving||photographing||['SellPet','SavePetTeam','ApplyPetTeam'].includes(command.type);
       const catchBefore=bridge.game?.ghostCatches?.[command.ghostIndex]?.lastCaughtAtMs??null;
       const actorAtSend=bridge.actor, revisionAtSend=bridge.revision||0;
       function verifyState(){
@@ -3267,7 +3388,9 @@ function mountFieldGrid(container, plan, onChange) {
         const norm=v=>String(v||'').toLowerCase();
         const canon=ids=>ids.map(norm).sort().join('|');
         let matches=false;
-        if(photographing){
+        if(equipping){
+          matches=ack?.ok===true&&ack.commandType==='SetSelectedItem'&&bridge.heldId==='Camera';
+        }else if(photographing){
           const c=bridge.game?.ghostCatches?.[command.ghostIndex];
           const owner=bridge.lastFullState?.data?.players?.find(p=>p.id===bridge.playerId)?.databaseUserId;
           matches=ack?.ok===true&&ack.commandType==='PhotographGhost'&&Number.isFinite(c?.lastCaughtAtMs)&&
@@ -4174,6 +4297,8 @@ function mountFieldGrid(container, plan, onChange) {
       : Promise.reject(new Error('Browser-Tabsperre fehlt – kein automatischer Pet-Verkauf')),
     now: () => Date.now(),
     running: () => state.running && !state.reloadRequested,
+    nativeGhostRuntime: () => readNativeGhostNavigation(window),
+    userInputAt: () => state.lastRealInput,
     protected: isMarkedProtected,
     send: sendCommand,
     snapshot: () => {
@@ -4250,5 +4375,5 @@ function mountFieldGrid(container, plan, onChange) {
   if (!firstV16 && readValue(sessionStorage, KEYS.resume) === "1") {
     start({ auto: true });
   }
-  console.log("✅ Magic Garden AutoFarm V16.3.3 geladen (Automationszentrale, ohne Fremdskripte).");
+  console.log("✅ Magic Garden AutoFarm V16.3.4 geladen (Automationszentrale, ohne Fremdskripte).");
 })();

@@ -4,7 +4,8 @@ module.exports=function applyV16(src,tooltipSource){
   rep('      let timeout;\n      const cancel',`      let timeout, observeTimer, ack=null;
       const retrieving=command.type==='MoveItem'&&command.from==='PetHutch'&&command.to==='inventory';
       const photographing=command.type==='PhotographGhost';
-      const observed=retrieving||photographing||['SellPet','SavePetTeam','ApplyPetTeam'].includes(command.type);
+      const equipping=command.type==='SetSelectedItem'&&command.itemId==='Camera';
+      const observed=equipping||retrieving||photographing||['SellPet','SavePetTeam','ApplyPetTeam'].includes(command.type);
       const catchBefore=bridge.game?.ghostCatches?.[command.ghostIndex]?.lastCaughtAtMs??null;
       const actorAtSend=bridge.actor, revisionAtSend=bridge.revision||0;
       function verifyState(){
@@ -17,7 +18,9 @@ module.exports=function applyV16(src,tooltipSource){
         const norm=v=>String(v||'').toLowerCase();
         const canon=ids=>ids.map(norm).sort().join('|');
         let matches=false;
-        if(photographing){
+        if(equipping){
+          matches=ack?.ok===true&&ack.commandType==='SetSelectedItem'&&bridge.heldId==='Camera';
+        }else if(photographing){
           const c=bridge.game?.ghostCatches?.[command.ghostIndex];
           const owner=bridge.lastFullState?.data?.players?.find(p=>p.id===bridge.playerId)?.databaseUserId;
           matches=ack?.ok===true&&ack.commandType==='PhotographGhost'&&Number.isFinite(c?.lastCaughtAtMs)&&
