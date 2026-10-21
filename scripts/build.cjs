@@ -60,18 +60,7 @@ replace(`    ws.send = function(payload) {
 `    ws.send = function(payload) {
       if (bridge.socket !== ws) return nativeSend.call(this, payload);
       if (typeof payload`,'old sender isolation');
-replace(`    if (bridge.connection === connection) return;
-    if (typeof bridge.unsubscribe === "function")`,
-`    if (bridge.connection === connection && bridge.subscribed) return;
-    if (typeof bridge.unsubscribe === "function")`,'subscribe retry');
-replace('    bridge.unsubscribe = null;\n    if (typeof connection.subscribeToPatches','    bridge.unsubscribe = null;\n    bridge.subscribed = false;\n    if (typeof connection.subscribeToPatches','subscription flag');
-replace(`        bridge.unsubscribe = connection.subscribeToPatches((_patches, full) => {
-          chooseOwnSlot(full);
-        });`,
-`        bridge.unsubscribe = connection.subscribeToPatches((_patches, full) => {
-          if (bridge.connection === connection && connection.currentWebSocket === bridge.socket) chooseOwnSlot(full);
-        });
-        bridge.subscribed = true;`,'patch isolation');
+// Room subscription is implemented directly in the source for Jotai builds.
 replace('if (!Number.isFinite(crop?.endTime) || crop.endTime > now) continue;','if (!Number.isFinite(crop?.endTime) || crop.endTime > serverNow()) continue;','ripe server clock');
 replace('        return { tile, slotsIndex: crop.slotId, key };','        if (automation && !automation.harvestAllowed(plant, crop)) continue;\n        return { tile, slotsIndex: crop.slotId, key };','smart harvest');
 replace('      if (!ws) return reject(new Error("WebSocket nicht verbunden"));',`      if (!ws) return reject(new Error("WebSocket nicht verbunden"));
@@ -157,11 +146,11 @@ replace('  // ===== Konsole =====',`  // ===== Own-game catalogs: observe early,
   // ===== Konsole =====`,'init engine');
 replace('    state, cfg, prefs, start, stop, resetTimer, resetSession, selectedSlots, getDiagnostics, checkForUpdate, setNumberPreference,','    state, cfg, prefs, start, stop, resetTimer, resetSession, selectedSlots, getDiagnostics, checkForUpdate, setNumberPreference, automation,','public API');
 replace('      runtimeSeconds: Math.floor(runtimeMs() / 1000)','      runtimeSeconds: Math.floor(runtimeMs() / 1000),\n      automation: automation?.status() || null','diag');
-replace('console.log("✅ Magic Garden AutoFarm V14.0.3 geladen (keine QPM-/Companion-Abhaengigkeit).");','console.log("✅ Magic Garden AutoFarm V16.3.0 geladen (Automationszentrale, ohne Fremdskripte).");','boot');
+replace('console.log("✅ Magic Garden AutoFarm V14.0.3 geladen (keine QPM-/Companion-Abhaengigkeit).");','console.log("✅ Magic Garden AutoFarm V16.3.1 geladen (Automationszentrale, ohne Fremdskripte).");','boot');
 src = require('./compact-menu.cjs')(src, stripExports('compact-menu.js'));
 src = require('./field-plan.cjs')(src, stripExports('field-plan.js'));
 src = require('./header-updater.cjs')(src, stripExports('update-fetch.js'));
 src = require('./v16.cjs')(src, stripExports('info-tooltips.js')); 
 new vm.Script(src,{filename:'MagicGardenAutoFarm.user.js'});
 fs.writeFileSync(path.join(root,'MagicGardenAutoFarm.user.js'),src);
-console.log('Built V16.3.0:',Buffer.byteLength(src),'bytes');
+console.log('Built V16.3.1:,Buffer.byteLength(src),'bytes');
