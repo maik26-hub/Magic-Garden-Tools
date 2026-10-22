@@ -21,7 +21,7 @@ function readNativeGhostNavigation(page){
       Number.isFinite(p.tile?.x)&&Number.isFinite(p.tile?.y)).map(p=>({ghostIndex:p.index,ghostInstanceId:p.instanceId,x:p.tile.x,y:p.tile.y}));
     return {actor:context.room?.localPlayerId,roomId:scope.displayedRoomId,serverTimeMs:context.serverTimeMs,
       position:context.room?.localPlayerPosition,stage:values.get('dayNightStageAtom'),holding:values.get('isHoldingCameraAtom'),
-      mode:values.get('cameraModeAtom'),blocked:values.get('anyModalOpenAtom')!==false||page.document?.hidden===true,tap,targets};
+      mode:values.get('cameraModeAtom'),blocked:values.get('anyModalOpenAtom')!==false,tap,targets};
   }catch{return null;}
 }
 function createGhostNavigator(env){
