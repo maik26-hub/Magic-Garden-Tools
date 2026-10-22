@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         Magic Garden AutoFarm
 // @namespace    mg-autofarm-local
-// @version      16.3.5
+// @version      16.3.6
 // @updateURL   https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js
 // @downloadURL https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js
-// @description  V16.3.5: safe Pet Auto-Sell and optional verified Ghost Capture
+// @description  V16.3.6: safe Pet Auto-Sell and optional verified Ghost Capture
 // @match        https://magicgarden.gg/*
 // @run-at       document-start
 // @grant        GM_xmlhttpRequest
@@ -1138,7 +1138,7 @@ function readNativeGhostNavigation(page){
       Number.isFinite(p.tile?.x)&&Number.isFinite(p.tile?.y)).map(p=>({ghostIndex:p.index,ghostInstanceId:p.instanceId,x:p.tile.x,y:p.tile.y}));
     return {actor:context.room?.localPlayerId,roomId:scope.displayedRoomId,serverTimeMs:context.serverTimeMs,
       position:context.room?.localPlayerPosition,stage:values.get('dayNightStageAtom'),holding:values.get('isHoldingCameraAtom'),
-      mode:values.get('cameraModeAtom'),blocked:values.get('anyModalOpenAtom')!==false||page.document?.hidden===true,tap,targets};
+      mode:values.get('cameraModeAtom'),blocked:values.get('anyModalOpenAtom')!==false,tap,targets};
   }catch{return null;}
 }
 function createGhostNavigator(env){
@@ -2851,7 +2851,7 @@ function mountFieldGrid(container, plan, onChange) {
   }
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-  const VERSION = "16.3.5";
+  const VERSION = "16.3.6";
   const UPDATE_URL = "https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js";
   const NUMBER_FIELDS = Object.freeze({
     sellThreshold: { min: 5, max: 200, step: 1 },
@@ -4408,5 +4408,5 @@ function mountFieldGrid(container, plan, onChange) {
   if (!firstV16 && readValue(sessionStorage, KEYS.resume) === "1") {
     start({ auto: true });
   }
-  console.log("✅ Magic Garden AutoFarm V16.3.5 geladen (Automationszentrale, ohne Fremdskripte).");
+  console.log("✅ Magic Garden AutoFarm V16.3.6 geladen (Automationszentrale, ohne Fremdskripte).");
 })();
