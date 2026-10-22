@@ -1739,7 +1739,7 @@ function createAutomationCore(env) {
     let immature=0, unclear=0;
     for(const [key,p] of Object.entries(s.garden)){
       const tile=Number(key);
-      if(!Number.isInteger(tile)||tile<0||tile>=200||p?.objectType!=='plant')continue;
+      if(!Number.isInteger(tile)||tile<0||tile>=200||s.fieldModes?.[tile]!=='plant'||p?.objectType!=='plant')continue;
       for(const c of arr(p.slots)){
         if(!Number.isInteger(c?.slotId)||c.slotId<0)continue;
         const i={...c,species:c.species||p.species};
