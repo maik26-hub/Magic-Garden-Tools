@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         Magic Garden AutoFarm
 // @namespace    mg-autofarm-local
-// @version      16.3.4
+// @version      16.3.5
 // @updateURL   https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js
 // @downloadURL https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js
-// @description  V16.3.4: safe Pet Auto-Sell and optional verified Ghost Capture
+// @description  V16.3.5: safe Pet Auto-Sell and optional verified Ghost Capture
 // @match        https://magicgarden.gg/*
 // @run-at       document-start
 // @grant        GM_xmlhttpRequest
@@ -1728,10 +1728,31 @@ function createAutomationCore(env) {
     return null;
   }
   function planJournal(s){
-    if(total(s,'Tool','Camera')<1){reasons.journal='Camera im Inventar fehlt';return null;}const record=JSON.stringify(s.own.journal||{});
+    if(total(s,'Tool','Camera')<1&&s.cameraOwned!==true){
+      reasons.journal='Kamera nicht bestätigt (Inventar oder Spielbesitz)';return null;
+    }
+    const record=JSON.stringify(s.own.journal||{});
     for(const i of s.inventory.items){const category=i?.itemType==='Produce'?'produce':i?.itemType==='Pet'?'pets':null;if(category&&str(i.id)&&journalNeed(s,i,category))return job('journal','journal:item:'+i.id,record,{type:'LogItem',target:{kind:'inventoryItem',itemId:i.id}},n=>!journalNeed(n,i,category),5000);}
     for(const p of arr(s.own.petSlots))if(str(p?.id)&&journalNeed(s,p,'pets'))return job('journal','journal:pet:'+p.id,record,{type:'LogItem',target:{kind:'petSlot',petId:p.id}},n=>!journalNeed(n,p,'pets'),5000);
-    for(const tile of plots(s,'plant')){const p=s.garden[tile];if(p?.objectType!=='plant')continue;for(const c of arr(p.slots)){const i={...c,species:c.species||p.species};if(Number.isInteger(c.slotId)&&num(c.endTime)&&c.endTime<=s.serverNow&&journalNeed(s,i,'produce'))return job('journal','journal:crop:'+tile+':'+c.slotId,record,{type:'LogItem',target:{kind:'growSlot',slot:tile,slotsIndex:c.slotId}},n=>!journalNeed(n,i,'produce'),5000);}}return null;
+    // Journal photos are independent of AutoFarm's user-selected planting fields.
+    // Only own numbered garden slots are addressable by LogItem/growSlot.
+    let immature=0, unclear=0;
+    for(const [key,p] of Object.entries(s.garden)){
+      const tile=Number(key);
+      if(!Number.isInteger(tile)||tile<0||tile>=200||p?.objectType!=='plant')continue;
+      for(const c of arr(p.slots)){
+        if(!Number.isInteger(c?.slotId)||c.slotId<0)continue;
+        const i={...c,species:c.species||p.species};
+        if(!str(i.species)||!Array.isArray(i.mutations)){unclear++;continue;}
+        if(!journalNeed(s,i,'produce'))continue;
+        if(!num(c.endTime)||c.endTime>s.serverNow){immature++;continue;}
+        return job('journal','journal:crop:'+tile+':'+c.slotId,record,
+          {type:'LogItem',target:{kind:'growSlot',slot:tile,slotsIndex:c.slotId}},
+          n=>!journalNeed(n,i,'produce'),5000);
+      }
+    }
+    reasons.journal=unclear?'Pflanzendaten teilweise unvollständig':immature?'Warte auf fotografierbare Pflanzen':'Keine fehlenden Journal-Varianten';
+    return null;
   }
   function planFeed(s){const food=sortedFood(s);if(!catalogs.pets||!catalogs.plants){reasons.feed='Pet-/Pflanzenkatalog fehlt';return null;}for(const p of arr(s.own.petSlots).slice().sort((a,b)=>(a?.hunger||0)-(b?.hunger||0))){const c=catalogs.pets[p?.petSpecies],max=c?.coinsToFullyReplenishHunger??c?.maxHunger;if(!str(p?.id)||!num(p.hunger)||!num(max)||max<=0||p.hunger/max*100>=config.hungerPercent)continue;const i=food.find(i=>arr(c.diet).includes(i.species));if(!i){reasons.feed='Kein freigegebenes, passendes Futter';continue;}return job('feed','feed:'+p.id,p.hunger+':'+i.id,{type:'FeedPet',petItemId:p.id,cropItemId:i.id},n=>!n.inventory.items.some(x=>x?.id===i.id),5000);}return null;}
   function storageFor(s,id){return arr(s.inventory.storages).find(st=>st?.decorId===id&&Array.isArray(st.items));}
@@ -2830,7 +2851,7 @@ function mountFieldGrid(container, plan, onChange) {
   }
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-  const VERSION = "16.3.4";
+  const VERSION = "16.3.5";
   const UPDATE_URL = "https://raw.githubusercontent.com/maik26-hub/Magic-Garden-Tools/main/MagicGardenAutoFarm.user.js";
   const NUMBER_FIELDS = Object.freeze({
     sellThreshold: { min: 5, max: 200, step: 1 },
@@ -4304,7 +4325,19 @@ function mountFieldGrid(container, plan, onChange) {
     snapshot: () => {
       if (!getSocket() || !bridge.garden || !bridge.own || !bridge.game || !bridge.actor) return null;
       return {roomId:bridge.lastFullState?.data?.roomId,actor:bridge.actor,own:bridge.own,game:bridge.game,garden:bridge.garden,
-        inventory:bridge.inventory,generation:bridge.generation,serverNow:serverNow(),
+        inventory:bridge.inventory,generation:bridge.generation,serverNow:serverNow(),cameraOwned:(() => {
+          const cache=window.jotaiAtomCache;
+          const atoms=cache instanceof Map?cache:cache?.cache;
+          const store=window.__jotaiStore;
+          if(!(atoms instanceof Map)||typeof store?.get!=='function')return false;
+          for(const atom of atoms.values()){
+            const label=String(atom?.debugLabel||'');
+            if(label==='ownsCameraAtom'||label.endsWith('/ownsCameraAtom')){
+              try{return store.get(atom)===true;}catch{return false;}
+            }
+          }
+          return false;
+        })(),
         ghost:readNativeGhostState(window),
         ownerKey:bridge.lastFullState?.data?.players?.find(p=>p.id===bridge.playerId)?.databaseUserId||bridge.actor,heldId:bridge.heldId,selected:[...selectedSlots()].sort((a,b)=>a-b),fieldModes:fieldPlan.snapshot()};
     },
@@ -4375,5 +4408,5 @@ function mountFieldGrid(container, plan, onChange) {
   if (!firstV16 && readValue(sessionStorage, KEYS.resume) === "1") {
     start({ auto: true });
   }
-  console.log("✅ Magic Garden AutoFarm V16.3.4 geladen (Automationszentrale, ohne Fremdskripte).");
+  console.log("✅ Magic Garden AutoFarm V16.3.5 geladen (Automationszentrale, ohne Fremdskripte).");
 })();
