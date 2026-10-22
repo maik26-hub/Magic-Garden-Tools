@@ -54,3 +54,15 @@ test('full automation serially equips camera walks and confirms PhotographGhost'
  h.advance();await e.step();assert.deepEqual(calls,['SetSelectedItem','PhotographGhost']);
  assert.equal(e.status().modules.find(m=>m.id==='ghostCapture').confirmed,1);
 });
+
+test('hidden tab does not independently block fresh native ghost navigation',()=>{
+ const h=fixture(),nativeGhost={index:2,instanceId:'current',out:true,tile:{x:6,y:3}};
+ const tap={...h.tap,isActive:true},player={isActive:true,getSystem:name=>name==='tapToMove'?tap:null};
+ const scope={isActive:true,isWorldBuilt:true,isWorldDrawing:true,displayedRoomId:'room',context:{serverTimeMs:10000,room:{localPlayerId:'me',localPlayerPosition:{x:1,y:1}}},getSystem:name=>name==='ghost'?{ghosts:[nativeGhost]}:null};
+ const vals={quinoaDevEngineAtom:{page:{rendererScope:scope,playerViews:player,playerViewsReady:true}},dayNightStageAtom:'midnight',isHoldingCameraAtom:true,cameraModeAtom:'player',anyModalOpenAtom:false};
+ const atoms=new Map(Object.keys(vals).map(debugLabel=>[debugLabel,{debugLabel}]));
+ const page={document:{hidden:true},jotaiAtomCache:{cache:atoms},__jotaiStore:{get:a=>vals[a.debugLabel]}};
+ assert.equal(readNativeGhostNavigation(page)?.blocked,false);
+ vals.anyModalOpenAtom=true;assert.equal(readNativeGhostNavigation(page)?.blocked,true);
+ vals.anyModalOpenAtom=false;scope.isWorldDrawing=false;assert.equal(readNativeGhostNavigation(page),null);
+});
