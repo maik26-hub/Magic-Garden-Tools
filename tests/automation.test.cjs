@@ -156,3 +156,19 @@ test('a crop can be protected, released, then protected again without F5 or togg
  assert.deepEqual(h.s.inventory.favoritedItemIds,['reversible']);
  assert.deepEqual(h.commands.map(c=>c.itemId),['reversible','reversible','reversible']);
 });
+
+test("journal scans own green plots even outside the user's selected slots",async()=>{
+  const h=await harness();h.enable({journal:true});h.s.inventory.items=[stack('Tool','Camera',1)];
+  h.s.fieldModes.fill('none');h.s.fieldModes[192]='plant';h.s.garden[192]=plant('Carrot');
+  await h.e.step();
+  assert.deepEqual(h.commands[0],{type:'LogItem',target:{kind:'growSlot',slot:192,slotsIndex:0}});
+});
+test('journal accepts verified native camera ownership without inventory tool stack',async()=>{
+  const h=await harness();h.enable({journal:true});h.s.cameraOwned=true;h.s.inventory.items=[produce()];
+  await h.e.step();
+  assert.equal(h.commands[0]?.type,'LogItem');
+});
+test('journal does not guess camera ownership or incomplete plant mutations',async()=>{
+  const h=await harness();h.enable({journal:true});h.s.garden[0]=plant('Carrot',{mutations:undefined});
+  await h.e.step();assert.equal(h.commands.length,0);
+});
